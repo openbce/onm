@@ -86,6 +86,15 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&s| s > 0 && s < 1000000);
 
+    let duplex = read_sysfs_file(path, "duplex");
+
+    let carrier = read_sysfs_file(path, "carrier")
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|c| c == 1);
+
+    let numa_node =
+        read_sysfs_file(&path.join("device"), "numa_node").and_then(|s| s.parse::<i32>().ok());
+
     let driver = path
         .join("device/driver")
         .read_link()
@@ -105,6 +114,9 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         txqueuelen,
         state,
         speed,
+        duplex,
+        carrier,
+        numa_node,
         driver,
         pci_slot,
     })

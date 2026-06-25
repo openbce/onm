@@ -44,6 +44,9 @@ pub struct EthInterface {
     pub txqueuelen: u32,
     pub state: LinkState,
     pub speed: Option<u64>,
+    pub duplex: Option<String>,
+    pub carrier: Option<bool>,
+    pub numa_node: Option<i32>,
     pub driver: Option<String>,
     pub pci_slot: Option<String>,
 }
@@ -57,6 +60,9 @@ impl Default for EthInterface {
             txqueuelen: 1000,
             state: LinkState::Unknown,
             speed: None,
+            duplex: None,
+            carrier: None,
+            numa_node: None,
             driver: None,
             pci_slot: None,
         }

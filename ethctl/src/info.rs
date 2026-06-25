@@ -252,10 +252,31 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
     ]);
     table.add_row(vec!["  State", &iface.state.to_string(), "-"]);
     table.add_row(vec![
+        "  Carrier",
+        &iface
+            .carrier
+            .map(|c| if c { "yes" } else { "no" }.to_string())
+            .unwrap_or("-".to_string()),
+        "-",
+    ]);
+    table.add_row(vec![
         "  Speed",
         &iface
             .speed
             .map(|sp| format!("{} Mbps", sp))
+            .unwrap_or("-".to_string()),
+        "-",
+    ]);
+    table.add_row(vec![
+        "  Duplex",
+        &iface.duplex.clone().unwrap_or("-".to_string()),
+        "-",
+    ]);
+    table.add_row(vec![
+        "  NUMA Node",
+        &iface
+            .numa_node
+            .map(|n| n.to_string())
             .unwrap_or("-".to_string()),
         "-",
     ]);
