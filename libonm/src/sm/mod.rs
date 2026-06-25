@@ -249,7 +249,7 @@ impl Ufm {
             service_level: qos.service_level,
         };
 
-        let _ = self.client.put(&path, &qos).await?;
+        let _: () = self.client.put(&path, &qos).await?;
 
         Ok(())
     }
@@ -275,7 +275,7 @@ impl Ufm {
             guids,
         };
 
-        let _ = self.client.post(&path, &pkey).await?;
+        let _: () = self.client.post(&path, &pkey).await?;
 
         Ok(())
     }
@@ -298,7 +298,7 @@ impl Ufm {
             guids,
         };
 
-        self.client.post(&path, &pkey).await?;
+        self.client.post::<_, ()>(&path, &pkey).await?;
 
         Ok(())
     }
@@ -351,7 +351,7 @@ impl Ufm {
 
     pub async fn delete_partition(&self, pkey: &str) -> Result<(), UFMError> {
         let path = format!("/resources/pkeys/{}", pkey);
-        self.client.delete(&path).await?;
+        self.client.delete::<()>(&path).await?;
 
         Ok(())
     }

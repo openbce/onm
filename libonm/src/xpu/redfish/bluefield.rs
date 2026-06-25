@@ -18,7 +18,7 @@ impl Redfish for Bluefield {
         data.insert("Password", passwd);
 
         self.rest
-            .patch("/redfish/v1/AccountService/Accounts/root", &data)
+            .patch::<_, ()>("/redfish/v1/AccountService/Accounts/root", &data)
             .await
             .map_err(RedfishError::from)?;
 
