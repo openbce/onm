@@ -4,6 +4,7 @@ use tracing_subscriber::{filter::EnvFilter, filter::LevelFilter, fmt, prelude::*
 
 mod info;
 mod list;
+mod sysctl;
 
 #[derive(Parser)]
 #[command(name = "ethctl")]
@@ -19,11 +20,13 @@ struct Args {
 enum Commands {
     /// List all ethernet interfaces
     List,
-    /// Show detailed information of an interface
+    /// Show detailed information of an interface and network sysctl settings
     Info {
         #[arg(short, long)]
         name: String,
     },
+    /// Show network sysctl tuning parameters
+    Sysctl,
 }
 
 #[tokio::main]
@@ -42,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         Commands::List => list::run()?,
         Commands::Info { name } => info::run(&name)?,
+        Commands::Sysctl => sysctl::run(),
     }
 
     Ok(())

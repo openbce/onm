@@ -1,55 +1,32 @@
-use libonm::eth::{self, EthError};
+use libonm::eth;
 
-pub fn run(name: &str) -> Result<(), EthError> {
-    let iface = eth::get_interface(name)?;
-
-    println!("=== Interface: {} ===", iface.name);
-    println!("MAC Address: {}", iface.mac_address);
-    println!("MTU:         {}", iface.mtu);
-    println!("State:       {}", iface.state.to_string());
-    println!(
-        "Speed:       {}",
-        iface
-            .speed
-            .map(|s| format!("{} Mbps", s))
-            .unwrap_or("-".to_string())
-    );
-    println!(
-        "Driver:      {}",
-        iface.driver.unwrap_or("-".to_string())
-    );
-    println!(
-        "PCI Slot:    {}",
-        iface.pci_slot.unwrap_or("-".to_string())
-    );
-
-    println!();
-    println!("=== Network Sysctl Settings ===");
-
+pub fn run() {
     let sysctl = eth::get_network_sysctl();
+
+    println!("=== Network Sysctl Settings ===");
 
     println!();
     println!("-- Connection Tracking (conntrack) --");
-    print_opt("nf_conntrack_max", sysctl.conntrack.max);
-    print_opt("nf_conntrack_buckets", sysctl.conntrack.buckets);
+    print_opt("net.netfilter.nf_conntrack_max", sysctl.conntrack.max);
+    print_opt("net.netfilter.nf_conntrack_buckets", sysctl.conntrack.buckets);
     print_opt(
-        "nf_conntrack_tcp_timeout_established",
+        "net.netfilter.nf_conntrack_tcp_timeout_established",
         sysctl.conntrack.tcp_timeout_established,
     );
     print_opt(
-        "nf_conntrack_tcp_timeout_time_wait",
+        "net.netfilter.nf_conntrack_tcp_timeout_time_wait",
         sysctl.conntrack.tcp_timeout_time_wait,
     );
     print_opt(
-        "nf_conntrack_tcp_timeout_close_wait",
+        "net.netfilter.nf_conntrack_tcp_timeout_close_wait",
         sysctl.conntrack.tcp_timeout_close_wait,
     );
     print_opt(
-        "nf_conntrack_tcp_timeout_fin_wait",
+        "net.netfilter.nf_conntrack_tcp_timeout_fin_wait",
         sysctl.conntrack.tcp_timeout_fin_wait,
     );
     print_opt(
-        "nf_conntrack_tcp_max_retrans",
+        "net.netfilter.nf_conntrack_tcp_max_retrans",
         sysctl.conntrack.tcp_max_retrans,
     );
 
@@ -87,18 +64,16 @@ pub fn run(name: &str) -> Result<(), EthError> {
     println!("-- Reverse Path Filtering --");
     print_opt("net.ipv4.conf.all.rp_filter", sysctl.rp_filter.all);
     print_opt("net.ipv4.conf.default.rp_filter", sysctl.rp_filter.default);
-
-    Ok(())
 }
 
 fn print_opt(name: &str, value: Option<u64>) {
     println!(
-        "  {:<45} {}",
+        "  {:<50} {}",
         name,
         value.map(|v| v.to_string()).unwrap_or("-".to_string())
     );
 }
 
 fn print_opt_str(name: &str, value: Option<String>) {
-    println!("  {:<45} {}", name, value.unwrap_or("-".to_string()));
+    println!("  {:<50} {}", name, value.unwrap_or("-".to_string()));
 }
