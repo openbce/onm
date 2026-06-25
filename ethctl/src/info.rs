@@ -225,48 +225,48 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
     let iface = eth::get_interface(name)?;
     let profile = TuningProfile::from_str(profile_str);
     let s = SuggestedValues::for_profile(profile);
+    let sysctl = eth::get_network_sysctl();
 
-    println!("Profile: {}", profile.name());
-    println!();
+    let mut table = Table::new();
+    table.load_preset(NOTHING);
 
-    let mut iface_table = Table::new();
-    iface_table.load_preset(NOTHING);
-    iface_table.add_row(vec!["Name", &iface.name, "-"]);
-    iface_table.add_row(vec!["MAC Address", &iface.mac_address, "-"]);
-    iface_table.add_row(vec![
-        "MTU",
+    add_section(&mut table, "Overview");
+    table.add_row(vec!["  Profile", profile.name(), "-"]);
+    table.add_row(vec!["  Name", &iface.name, "-"]);
+    table.add_row(vec!["  MAC Address", &iface.mac_address, "-"]);
+    table.add_row(vec![
+        "  MTU",
         &iface.mtu.to_string(),
         &format!("{} (jumbo)", s.mtu),
     ]);
-    iface_table.add_row(vec![
-        "TX Queue Length",
+    table.add_row(vec![
+        "  TX Queue Length",
         &iface.txqueuelen.to_string(),
         &s.txqueuelen.to_string(),
     ]);
-    iface_table.add_row(vec!["State", &iface.state.to_string(), "-"]);
-    iface_table.add_row(vec![
-        "Speed",
+    table.add_row(vec!["  State", &iface.state.to_string(), "-"]);
+    table.add_row(vec![
+        "  Speed",
         &iface
             .speed
             .map(|sp| format!("{} Mbps", sp))
             .unwrap_or("-".to_string()),
         "-",
     ]);
-    iface_table.add_row(vec![
-        "Driver",
+    table.add_row(vec![
+        "  Driver",
         &iface.driver.clone().unwrap_or("-".to_string()),
         "-",
     ]);
-    iface_table.add_row(vec![
-        "PCI Slot",
+    table.add_row(vec![
+        "  PCI Slot",
         &iface.pci_slot.clone().unwrap_or("-".to_string()),
         "-",
     ]);
 
-    println!("{iface_table}");
-    println!();
+    add_sysctl_rows(&mut table, &sysctl, &s);
 
-    print_sysctl_tables(profile);
+    println!("{table}");
 
     Ok(())
 }
@@ -277,203 +277,207 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
     let sysctl = eth::get_network_sysctl();
     let s = SuggestedValues::for_profile(profile);
 
-    println!("Profile: {}", profile.name());
-    println!();
-
     let mut table = Table::new();
     table.load_preset(NOTHING);
 
-    add_section(&mut table, "Connection Tracking");
+    add_section(&mut table, "Overview");
+    table.add_row(vec!["  Profile", profile.name(), "-"]);
+
+    add_sysctl_rows(&mut table, &sysctl, &s);
+
+    println!("{table}");
+}
+
+fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &SuggestedValues) {
+    add_section(table, "Connection Tracking");
     add_row(
-        &mut table,
+        table,
         "  nf_conntrack_max",
         sysctl.conntrack.max,
         s.conntrack_max,
     );
     add_row(
-        &mut table,
+        table,
         "  nf_conntrack_buckets",
         sysctl.conntrack.buckets,
         s.conntrack_buckets,
     );
     add_row(
-        &mut table,
+        table,
         "  nf_conntrack_tcp_timeout_established",
         sysctl.conntrack.tcp_timeout_established,
         s.conntrack_tcp_timeout_established,
     );
     add_row(
-        &mut table,
+        table,
         "  nf_conntrack_tcp_timeout_time_wait",
         sysctl.conntrack.tcp_timeout_time_wait,
         s.conntrack_tcp_timeout_time_wait,
     );
     add_row(
-        &mut table,
+        table,
         "  nf_conntrack_tcp_timeout_close_wait",
         sysctl.conntrack.tcp_timeout_close_wait,
         s.conntrack_tcp_timeout_close_wait,
     );
     add_row(
-        &mut table,
+        table,
         "  nf_conntrack_tcp_timeout_fin_wait",
         sysctl.conntrack.tcp_timeout_fin_wait,
         s.conntrack_tcp_timeout_fin_wait,
     );
     add_row(
-        &mut table,
+        table,
         "  nf_conntrack_tcp_max_retrans",
         sysctl.conntrack.tcp_max_retrans,
         s.conntrack_tcp_max_retrans,
     );
 
-    add_section(&mut table, "Socket Buffers");
+    add_section(table, "Socket Buffers");
     add_row_bytes(
-        &mut table,
+        table,
         "  net.core.rmem_max",
         sysctl.socket_buffer.rmem_max,
         s.rmem_max,
     );
     add_row_bytes(
-        &mut table,
+        table,
         "  net.core.wmem_max",
         sysctl.socket_buffer.wmem_max,
         s.wmem_max,
     );
     add_row_bytes(
-        &mut table,
+        table,
         "  net.core.rmem_default",
         sysctl.socket_buffer.rmem_default,
         s.rmem_default,
     );
     add_row_bytes(
-        &mut table,
+        table,
         "  net.core.wmem_default",
         sysctl.socket_buffer.wmem_default,
         s.wmem_default,
     );
     add_row_tcp_mem(
-        &mut table,
+        table,
         "  net.ipv4.tcp_rmem",
-        sysctl.socket_buffer.tcp_rmem,
+        sysctl.socket_buffer.tcp_rmem.clone(),
         s.tcp_rmem,
     );
     add_row_tcp_mem(
-        &mut table,
+        table,
         "  net.ipv4.tcp_wmem",
-        sysctl.socket_buffer.tcp_wmem,
+        sysctl.socket_buffer.tcp_wmem.clone(),
         s.tcp_wmem,
     );
     add_row_bytes(
-        &mut table,
+        table,
         "  net.ipv4.udp_rmem_min",
         sysctl.socket_buffer.udp_rmem_min,
         s.udp_rmem_min,
     );
     add_row_bytes(
-        &mut table,
+        table,
         "  net.ipv4.udp_wmem_min",
         sysctl.socket_buffer.udp_wmem_min,
         s.udp_wmem_min,
     );
 
-    add_section(&mut table, "TCP Settings");
+    add_section(table, "TCP Settings");
     add_row(
-        &mut table,
+        table,
         "  net.core.somaxconn",
         sysctl.tcp.somaxconn,
         s.somaxconn,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.tcp_max_syn_backlog",
         sysctl.tcp.max_syn_backlog,
         s.tcp_max_syn_backlog,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.tcp_tw_reuse",
         sysctl.tcp.tw_reuse,
         s.tcp_tw_reuse,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.tcp_fin_timeout",
         sysctl.tcp.fin_timeout,
         s.tcp_fin_timeout,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.tcp_keepalive_time",
         sysctl.tcp.keepalive_time,
         s.tcp_keepalive_time,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.tcp_keepalive_probes",
         sysctl.tcp.keepalive_probes,
         s.tcp_keepalive_probes,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.tcp_keepalive_intvl",
         sysctl.tcp.keepalive_intvl,
         s.tcp_keepalive_intvl,
     );
     add_row_str(
-        &mut table,
+        table,
         "  net.ipv4.ip_local_port_range",
-        sysctl.tcp.ip_local_port_range,
+        sysctl.tcp.ip_local_port_range.clone(),
         s.ip_local_port_range,
     );
 
-    add_section(&mut table, "ARP / Neighbor Table");
+    add_section(table, "ARP / Neighbor Table");
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.neigh.default.gc_thresh1",
         sysctl.arp.gc_thresh1,
         s.arp_gc_thresh1,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.neigh.default.gc_thresh2",
         sysctl.arp.gc_thresh2,
         s.arp_gc_thresh2,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.neigh.default.gc_thresh3",
         sysctl.arp.gc_thresh3,
         s.arp_gc_thresh3,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.conf.all.arp_ignore",
         sysctl.arp.arp_ignore,
         s.arp_ignore,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.conf.all.arp_announce",
         sysctl.arp.arp_announce,
         s.arp_announce,
     );
 
-    add_section(&mut table, "Reverse Path Filtering");
+    add_section(table, "Reverse Path Filtering");
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.conf.all.rp_filter",
         sysctl.rp_filter.all,
         s.rp_filter,
     );
     add_row(
-        &mut table,
+        table,
         "  net.ipv4.conf.default.rp_filter",
         sysctl.rp_filter.default,
         s.rp_filter,
     );
-
-    println!("{table}");
 }
 
 pub async fn print_link_tables(name: &str, profile: TuningProfile) {
@@ -484,11 +488,11 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) {
     let link = eth::get_link_settings(name).await.ok();
     let ethtool = eth::get_ethtool_settings(name).await.ok();
 
-    println!("Profile: {}", profile.name());
-    println!();
-
     let mut table = Table::new();
     table.load_preset(NOTHING);
+
+    add_section(&mut table, "Overview");
+    table.add_row(vec!["  Profile", profile.name(), "-"]);
 
     add_section(&mut table, "IP Link Settings");
     if let Some(ref l) = link {
