@@ -5,11 +5,7 @@ use async_trait::async_trait;
 
 pub struct Bluefield {
     rest: RestClient,
-    bmc: BMC,
 }
-
-const DEFAULT_PASSWORD: &str = "0penBmc";
-const DEFAULT_USER: &str = "root";
 
 #[async_trait]
 impl Redfish for Bluefield {
@@ -36,18 +32,7 @@ impl Redfish for Bluefield {
     }
 
     async fn discover(&self) -> Result<(), RedfishError> {
-        if self.bmc_version().await.is_ok() {
-            return Ok(());
-        }
-
-        let default_bmc = Bluefield::default_bmc(&self.bmc.address);
-        let default_redfish = Box::new(Bluefield::new(&default_bmc)?);
-        default_redfish
-            .change_password(self.bmc.password.clone())
-            .await?;
-
         let _ = self.bmc_version().await?;
-
         Ok(())
     }
 }
@@ -58,19 +43,11 @@ impl Bluefield {
             address: bmc.address.clone(),
             password: bmc.password.clone(),
             username: bmc.username.clone(),
+            tls_verify: bmc.tls_verify,
         };
 
         Ok(Bluefield {
             rest: RestClient::new(&config)?,
-            bmc: bmc.clone(),
         })
-    }
-
-    fn default_bmc(addr: &str) -> BMC {
-        BMC {
-            address: addr.to_string(),
-            password: DEFAULT_PASSWORD.to_string(),
-            username: DEFAULT_USER.to_string(),
-        }
     }
 }

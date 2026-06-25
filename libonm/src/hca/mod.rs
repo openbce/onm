@@ -89,6 +89,14 @@ fn list_ib_ports() -> io::Result<HashMap<String, Vec<IbPort>>> {
         let device_list: NonNull<DevicePtr> = NonNull::new_unchecked(device_list.cast());
         let len: usize = num_devices.numeric_cast();
 
+        const MAX_DEVICES: usize = 256;
+        if len > MAX_DEVICES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unreasonable device count: {}", len),
+            ));
+        }
+
         let devices = slice::from_raw_parts(device_list.as_ptr(), len);
 
         for devptr in devices {
@@ -102,6 +110,9 @@ fn list_ib_ports() -> io::Result<HashMap<String, Vec<IbPort>>> {
 
             let dev_attr_ptr =
                 alloc::alloc(Layout::new::<ibv_device_attr>()) as *mut ibv_device_attr;
+            if dev_attr_ptr.is_null() {
+                return Err(io::Error::new(io::ErrorKind::OutOfMemory, "allocation failed"));
+            }
             defer! {
                 alloc::dealloc(dev_attr_ptr as *mut u8, Layout::new::<ibv_device_attr>());
             };
@@ -115,6 +126,9 @@ fn list_ib_ports() -> io::Result<HashMap<String, Vec<IbPort>>> {
             for i in 1..=(*dev_attr_ptr).phys_port_cnt {
                 let port_attr_ptr =
                     alloc::alloc(Layout::new::<ibv_port_attr>()) as *mut ibv_port_attr;
+                if port_attr_ptr.is_null() {
+                    return Err(io::Error::new(io::ErrorKind::OutOfMemory, "allocation failed"));
+                }
                 defer! {
                     alloc::dealloc(port_attr_ptr as *mut u8, Layout::new::<ibv_port_attr>());
                 };
@@ -124,6 +138,9 @@ fn list_ib_ports() -> io::Result<HashMap<String, Vec<IbPort>>> {
                 };
 
                 let gid_ptr = alloc::alloc(Layout::new::<ibv_gid>()) as *mut ibv_gid;
+                if gid_ptr.is_null() {
+                    return Err(io::Error::new(io::ErrorKind::OutOfMemory, "allocation failed"));
+                }
                 defer! {
                     alloc::dealloc(gid_ptr as *mut u8, Layout::new::<ibv_gid>());
                 };

@@ -20,10 +20,7 @@ use std::io;
 use libudev::Device;
 
 pub unsafe fn cstr_to_string(s: *const c_char) -> String {
-    CStr::from_ptr(s)
-        .to_str()
-        .expect("not an utf8 string")
-        .to_string()
+    CStr::from_ptr(s).to_string_lossy().into_owned()
 }
 
 pub fn get_property<'a>(device: &'a Device, name: &'a str) -> io::Result<&'a str> {

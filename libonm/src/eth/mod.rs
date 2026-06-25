@@ -3,6 +3,7 @@ mod types;
 use futures::TryStreamExt;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 pub use types::{
     ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
@@ -14,6 +15,7 @@ pub use types::{
 const SYS_CLASS_NET: &str = "/sys/class/net";
 const PROC_SYS: &str = "/proc/sys";
 const PROC_NET: &str = "/proc/net";
+const NETLINK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn list_interfaces() -> Result<Vec<EthInterface>, EthError> {
     let mut interfaces = Vec::new();
@@ -360,55 +362,68 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
 
     let (conn, mut handle, _) = ethtool::new_connection()
         .map_err(|e| EthError::Internal(format!("Failed to create ethtool connection: {}", e)))?;
-    tokio::spawn(conn);
+    let conn_handle = tokio::spawn(conn);
 
-    let mut settings = EthtoolSettings::default();
+    let result = tokio::time::timeout(NETLINK_TIMEOUT, async {
+        let mut settings = EthtoolSettings::default();
 
-    let mut rings = handle.ring().get(Some(name)).execute().await;
-    while let Ok(Some(msg)) = rings.try_next().await {
-        for attr in msg.payload.nlas {
-            if let EthtoolAttr::Ring(ring_attr) = attr {
-                match ring_attr {
-                    EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
-                    EthtoolRingAttr::Rx(v) => settings.ring.rx = Some(v),
-                    EthtoolRingAttr::TxMax(v) => settings.ring.tx_max = Some(v),
-                    EthtoolRingAttr::Tx(v) => settings.ring.tx = Some(v),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let mut coalesces = handle.coalesce().get(Some(name)).execute().await;
-    while let Ok(Some(msg)) = coalesces.try_next().await {
-        for attr in msg.payload.nlas {
-            if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
-                match coalesce_attr {
-                    EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
-                    EthtoolCoalesceAttr::TxUsecs(v) => settings.coalesce.tx_usecs = Some(v),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let mut features = handle.feature().get(Some(name)).execute().await;
-    while let Ok(Some(msg)) = features.try_next().await {
-        for attr in msg.payload.nlas {
-            if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
-                for bit in bits {
-                    match bit.name.as_str() {
-                        "tx-tcp-segmentation" => settings.offload.tso = Some(bit.value),
-                        "tx-generic-segmentation" => settings.offload.gso = Some(bit.value),
-                        "rx-gro" => settings.offload.gro = Some(bit.value),
+        let mut rings = handle.ring().get(Some(name)).execute().await;
+        while let Ok(Some(msg)) = rings.try_next().await {
+            for attr in msg.payload.nlas {
+                if let EthtoolAttr::Ring(ring_attr) = attr {
+                    match ring_attr {
+                        EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
+                        EthtoolRingAttr::Rx(v) => settings.ring.rx = Some(v),
+                        EthtoolRingAttr::TxMax(v) => settings.ring.tx_max = Some(v),
+                        EthtoolRingAttr::Tx(v) => settings.ring.tx = Some(v),
                         _ => {}
                     }
                 }
             }
         }
-    }
 
-    Ok(settings)
+        let mut coalesces = handle.coalesce().get(Some(name)).execute().await;
+        while let Ok(Some(msg)) = coalesces.try_next().await {
+            for attr in msg.payload.nlas {
+                if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
+                    match coalesce_attr {
+                        EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
+                        EthtoolCoalesceAttr::TxUsecs(v) => settings.coalesce.tx_usecs = Some(v),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let mut features = handle.feature().get(Some(name)).execute().await;
+        while let Ok(Some(msg)) = features.try_next().await {
+            for attr in msg.payload.nlas {
+                if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
+                    for bit in bits {
+                        match bit.name.as_str() {
+                            "tx-tcp-segmentation" => settings.offload.tso = Some(bit.value),
+                            "tx-generic-segmentation" => settings.offload.gso = Some(bit.value),
+                            "rx-gro" => settings.offload.gro = Some(bit.value),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        settings
+    })
+    .await;
+
+    conn_handle.abort();
+
+    match result {
+        Ok(settings) => Ok(settings),
+        Err(_) => Err(EthError::Internal(format!(
+            "ethtool query timed out for {}",
+            name
+        ))),
+    }
 }
 
 pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
@@ -416,31 +431,44 @@ pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
 
     let (conn, handle, _) = rtnetlink::new_connection()
         .map_err(|e| EthError::Internal(format!("Failed to create rtnetlink connection: {}", e)))?;
-    tokio::spawn(conn);
+    let conn_handle = tokio::spawn(conn);
 
-    let mut settings = LinkSettings::default();
+    let result = tokio::time::timeout(NETLINK_TIMEOUT, async {
+        let mut settings = LinkSettings::default();
 
-    let mut links = handle.link().get().match_name(name.to_string()).execute();
-    if let Some(link) = links.try_next().await.ok().flatten() {
-        for attr in link.attributes {
-            match attr {
-                LinkAttribute::Mtu(v) => settings.mtu = Some(v),
-                LinkAttribute::MinMtu(v) => settings.min_mtu = Some(v),
-                LinkAttribute::MaxMtu(v) => settings.max_mtu = Some(v),
-                LinkAttribute::TxQueueLen(v) => settings.txqueuelen = Some(v),
-                LinkAttribute::NumTxQueues(v) => settings.num_tx_queues = Some(v),
-                LinkAttribute::NumRxQueues(v) => settings.num_rx_queues = Some(v),
-                LinkAttribute::GsoMaxSize(v) => settings.gso_max_size = Some(v),
-                LinkAttribute::GsoMaxSegs(v) => settings.gso_max_segs = Some(v),
-                LinkAttribute::GroMaxSize(v) => settings.gro_max_size = Some(v),
-                LinkAttribute::TsoMaxSize(v) => settings.tso_max_size = Some(v),
-                LinkAttribute::TsoMaxSegs(v) => settings.tso_max_segs = Some(v),
-                LinkAttribute::Qdisc(v) => settings.qdisc = Some(v),
-                LinkAttribute::Group(v) => settings.group = Some(v),
-                _ => {}
+        let mut links = handle.link().get().match_name(name.to_string()).execute();
+        if let Some(link) = links.try_next().await.ok().flatten() {
+            for attr in link.attributes {
+                match attr {
+                    LinkAttribute::Mtu(v) => settings.mtu = Some(v),
+                    LinkAttribute::MinMtu(v) => settings.min_mtu = Some(v),
+                    LinkAttribute::MaxMtu(v) => settings.max_mtu = Some(v),
+                    LinkAttribute::TxQueueLen(v) => settings.txqueuelen = Some(v),
+                    LinkAttribute::NumTxQueues(v) => settings.num_tx_queues = Some(v),
+                    LinkAttribute::NumRxQueues(v) => settings.num_rx_queues = Some(v),
+                    LinkAttribute::GsoMaxSize(v) => settings.gso_max_size = Some(v),
+                    LinkAttribute::GsoMaxSegs(v) => settings.gso_max_segs = Some(v),
+                    LinkAttribute::GroMaxSize(v) => settings.gro_max_size = Some(v),
+                    LinkAttribute::TsoMaxSize(v) => settings.tso_max_size = Some(v),
+                    LinkAttribute::TsoMaxSegs(v) => settings.tso_max_segs = Some(v),
+                    LinkAttribute::Qdisc(v) => settings.qdisc = Some(v),
+                    LinkAttribute::Group(v) => settings.group = Some(v),
+                    _ => {}
+                }
             }
         }
-    }
 
-    Ok(settings)
+        settings
+    })
+    .await;
+
+    conn_handle.abort();
+
+    match result {
+        Ok(settings) => Ok(settings),
+        Err(_) => Err(EthError::Internal(format!(
+            "rtnetlink query timed out for {}",
+            name
+        ))),
+    }
 }

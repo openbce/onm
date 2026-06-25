@@ -26,11 +26,30 @@ impl From<RedfishError> for XPUError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BMC {
     pub address: String,
     pub username: String,
     pub password: String,
+    /// Whether to verify TLS certificates. Defaults to true for security.
+    /// Set to false only for development/testing with self-signed certs.
+    #[serde(default = "default_tls_verify")]
+    pub tls_verify: bool,
+}
+
+fn default_tls_verify() -> bool {
+    true
+}
+
+impl std::fmt::Debug for BMC {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BMC")
+            .field("address", &self.address)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("tls_verify", &self.tls_verify)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

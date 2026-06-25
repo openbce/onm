@@ -94,7 +94,10 @@ impl TryFrom<u8> for IbPortLinkType {
         match v {
             1 => Ok(Self::Infiniband),
             2 => Ok(Self::Ethernet),
-            _ => Err(io::Error::last_os_error()),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid port link type: {}", v),
+            )),
         }
     }
 }
@@ -133,7 +136,10 @@ impl TryFrom<u32> for IbPortState {
             ib::ibv_port_state::IBV_PORT_ACTIVE => Ok(Self::Active),
             ib::ibv_port_state::IBV_PORT_DOWN => Ok(Self::Down),
 
-            _ => Err(io::Error::last_os_error()),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid port state: {}", v),
+            )),
         }
     }
 }
@@ -163,7 +169,10 @@ impl TryFrom<u8> for IbPortPhysState {
             3 => Ok(Self::Disabled),
             5 => Ok(Self::LinkUp),
 
-            _ => Err(io::Error::last_os_error()),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid port physical state: {}", v),
+            )),
         }
     }
 }

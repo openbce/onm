@@ -183,7 +183,7 @@ impl From<RestError> for UFMError {
             RestError::NotFound(msg) => UFMError::NotFound(msg),
             RestError::AuthFailure(msg) => UFMError::InvalidConfig(msg),
             RestError::InvalidConfig(msg) => UFMError::InvalidConfig(msg),
-            _ => UFMError::Unknown(String::from("Unknown Rest Error")),
+            _ => UFMError::Unknown(e.to_string()),
         }
     }
 }
@@ -223,6 +223,7 @@ pub fn connect(conf: UFMConfig) -> Result<Ufm, UFMError> {
         address: address.to_string(),
         password,
         username,
+        tls_verify: true,
     })?;
 
     Ok(Ufm { client: c })
