@@ -1,4 +1,4 @@
-use comfy_table::{presets::UTF8_FULL, Table};
+use comfy_table::{presets::NOTHING, Cell, Color, Table};
 use libonm::eth::{self, EthError};
 
 #[derive(Clone, Copy)]
@@ -276,214 +276,201 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
     let s = SuggestedValues::for_profile(profile);
     let header = profile.header_suffix();
 
-    let mut conntrack = Table::new();
-    conntrack.load_preset(UTF8_FULL);
-    conntrack.set_header(vec!["Connection Tracking", "Value", header]);
+    let mut table = Table::new();
+    table.load_preset(NOTHING);
+    table.set_header(vec!["Parameter", "Value", header]);
+
+    add_section(&mut table, "Connection Tracking");
     add_row(
-        &mut conntrack,
-        "nf_conntrack_max",
+        &mut table,
+        "  nf_conntrack_max",
         sysctl.conntrack.max,
         s.conntrack_max,
     );
     add_row(
-        &mut conntrack,
-        "nf_conntrack_buckets",
+        &mut table,
+        "  nf_conntrack_buckets",
         sysctl.conntrack.buckets,
         s.conntrack_buckets,
     );
     add_row(
-        &mut conntrack,
-        "nf_conntrack_tcp_timeout_established",
+        &mut table,
+        "  nf_conntrack_tcp_timeout_established",
         sysctl.conntrack.tcp_timeout_established,
         s.conntrack_tcp_timeout_established,
     );
     add_row(
-        &mut conntrack,
-        "nf_conntrack_tcp_timeout_time_wait",
+        &mut table,
+        "  nf_conntrack_tcp_timeout_time_wait",
         sysctl.conntrack.tcp_timeout_time_wait,
         s.conntrack_tcp_timeout_time_wait,
     );
     add_row(
-        &mut conntrack,
-        "nf_conntrack_tcp_timeout_close_wait",
+        &mut table,
+        "  nf_conntrack_tcp_timeout_close_wait",
         sysctl.conntrack.tcp_timeout_close_wait,
         s.conntrack_tcp_timeout_close_wait,
     );
     add_row(
-        &mut conntrack,
-        "nf_conntrack_tcp_timeout_fin_wait",
+        &mut table,
+        "  nf_conntrack_tcp_timeout_fin_wait",
         sysctl.conntrack.tcp_timeout_fin_wait,
         s.conntrack_tcp_timeout_fin_wait,
     );
     add_row(
-        &mut conntrack,
-        "nf_conntrack_tcp_max_retrans",
+        &mut table,
+        "  nf_conntrack_tcp_max_retrans",
         sysctl.conntrack.tcp_max_retrans,
         s.conntrack_tcp_max_retrans,
     );
-    println!("{conntrack}");
-    println!();
 
-    let mut socket = Table::new();
-    socket.load_preset(UTF8_FULL);
-    socket.set_header(vec!["Socket Buffers", "Value", header]);
+    add_section(&mut table, "Socket Buffers");
     add_row_bytes(
-        &mut socket,
-        "net.core.rmem_max",
+        &mut table,
+        "  net.core.rmem_max",
         sysctl.socket_buffer.rmem_max,
         s.rmem_max,
     );
     add_row_bytes(
-        &mut socket,
-        "net.core.wmem_max",
+        &mut table,
+        "  net.core.wmem_max",
         sysctl.socket_buffer.wmem_max,
         s.wmem_max,
     );
     add_row_bytes(
-        &mut socket,
-        "net.core.rmem_default",
+        &mut table,
+        "  net.core.rmem_default",
         sysctl.socket_buffer.rmem_default,
         s.rmem_default,
     );
     add_row_bytes(
-        &mut socket,
-        "net.core.wmem_default",
+        &mut table,
+        "  net.core.wmem_default",
         sysctl.socket_buffer.wmem_default,
         s.wmem_default,
     );
     add_row_tcp_mem(
-        &mut socket,
-        "net.ipv4.tcp_rmem",
+        &mut table,
+        "  net.ipv4.tcp_rmem",
         sysctl.socket_buffer.tcp_rmem,
         s.tcp_rmem,
     );
     add_row_tcp_mem(
-        &mut socket,
-        "net.ipv4.tcp_wmem",
+        &mut table,
+        "  net.ipv4.tcp_wmem",
         sysctl.socket_buffer.tcp_wmem,
         s.tcp_wmem,
     );
     add_row_bytes(
-        &mut socket,
-        "net.ipv4.udp_rmem_min",
+        &mut table,
+        "  net.ipv4.udp_rmem_min",
         sysctl.socket_buffer.udp_rmem_min,
         s.udp_rmem_min,
     );
     add_row_bytes(
-        &mut socket,
-        "net.ipv4.udp_wmem_min",
+        &mut table,
+        "  net.ipv4.udp_wmem_min",
         sysctl.socket_buffer.udp_wmem_min,
         s.udp_wmem_min,
     );
-    println!("{socket}");
-    println!();
 
-    let mut tcp = Table::new();
-    tcp.load_preset(UTF8_FULL);
-    tcp.set_header(vec!["TCP Settings", "Value", header]);
+    add_section(&mut table, "TCP Settings");
     add_row(
-        &mut tcp,
-        "net.core.somaxconn",
+        &mut table,
+        "  net.core.somaxconn",
         sysctl.tcp.somaxconn,
         s.somaxconn,
     );
     add_row(
-        &mut tcp,
-        "net.ipv4.tcp_max_syn_backlog",
+        &mut table,
+        "  net.ipv4.tcp_max_syn_backlog",
         sysctl.tcp.max_syn_backlog,
         s.tcp_max_syn_backlog,
     );
     add_row(
-        &mut tcp,
-        "net.ipv4.tcp_tw_reuse",
+        &mut table,
+        "  net.ipv4.tcp_tw_reuse",
         sysctl.tcp.tw_reuse,
         s.tcp_tw_reuse,
     );
     add_row(
-        &mut tcp,
-        "net.ipv4.tcp_fin_timeout",
+        &mut table,
+        "  net.ipv4.tcp_fin_timeout",
         sysctl.tcp.fin_timeout,
         s.tcp_fin_timeout,
     );
     add_row(
-        &mut tcp,
-        "net.ipv4.tcp_keepalive_time",
+        &mut table,
+        "  net.ipv4.tcp_keepalive_time",
         sysctl.tcp.keepalive_time,
         s.tcp_keepalive_time,
     );
     add_row(
-        &mut tcp,
-        "net.ipv4.tcp_keepalive_probes",
+        &mut table,
+        "  net.ipv4.tcp_keepalive_probes",
         sysctl.tcp.keepalive_probes,
         s.tcp_keepalive_probes,
     );
     add_row(
-        &mut tcp,
-        "net.ipv4.tcp_keepalive_intvl",
+        &mut table,
+        "  net.ipv4.tcp_keepalive_intvl",
         sysctl.tcp.keepalive_intvl,
         s.tcp_keepalive_intvl,
     );
     add_row_str(
-        &mut tcp,
-        "net.ipv4.ip_local_port_range",
+        &mut table,
+        "  net.ipv4.ip_local_port_range",
         sysctl.tcp.ip_local_port_range,
         s.ip_local_port_range,
     );
-    println!("{tcp}");
-    println!();
 
-    let mut arp = Table::new();
-    arp.load_preset(UTF8_FULL);
-    arp.set_header(vec!["ARP / Neighbor Table", "Value", header]);
+    add_section(&mut table, "ARP / Neighbor Table");
     add_row(
-        &mut arp,
-        "net.ipv4.neigh.default.gc_thresh1",
+        &mut table,
+        "  net.ipv4.neigh.default.gc_thresh1",
         sysctl.arp.gc_thresh1,
         s.arp_gc_thresh1,
     );
     add_row(
-        &mut arp,
-        "net.ipv4.neigh.default.gc_thresh2",
+        &mut table,
+        "  net.ipv4.neigh.default.gc_thresh2",
         sysctl.arp.gc_thresh2,
         s.arp_gc_thresh2,
     );
     add_row(
-        &mut arp,
-        "net.ipv4.neigh.default.gc_thresh3",
+        &mut table,
+        "  net.ipv4.neigh.default.gc_thresh3",
         sysctl.arp.gc_thresh3,
         s.arp_gc_thresh3,
     );
     add_row(
-        &mut arp,
-        "net.ipv4.conf.all.arp_ignore",
+        &mut table,
+        "  net.ipv4.conf.all.arp_ignore",
         sysctl.arp.arp_ignore,
         s.arp_ignore,
     );
     add_row(
-        &mut arp,
-        "net.ipv4.conf.all.arp_announce",
+        &mut table,
+        "  net.ipv4.conf.all.arp_announce",
         sysctl.arp.arp_announce,
         s.arp_announce,
     );
-    println!("{arp}");
-    println!();
 
-    let mut rp = Table::new();
-    rp.load_preset(UTF8_FULL);
-    rp.set_header(vec!["Reverse Path Filtering", "Value", header]);
+    add_section(&mut table, "Reverse Path Filtering");
     add_row(
-        &mut rp,
-        "net.ipv4.conf.all.rp_filter",
+        &mut table,
+        "  net.ipv4.conf.all.rp_filter",
         sysctl.rp_filter.all,
         s.rp_filter,
     );
     add_row(
-        &mut rp,
-        "net.ipv4.conf.default.rp_filter",
+        &mut table,
+        "  net.ipv4.conf.default.rp_filter",
         sysctl.rp_filter.default,
         s.rp_filter,
     );
-    println!("{rp}");
+
+    println!("{table}");
 }
 
 pub async fn print_link_tables(name: &str, profile: TuningProfile) {
@@ -495,103 +482,93 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) {
     let link = eth::get_link_settings(name).await.ok();
     let ethtool = eth::get_ethtool_settings(name).await.ok();
 
-    let mut link_table = Table::new();
-    link_table.load_preset(UTF8_FULL);
-    link_table.set_header(vec!["IP Link Settings", "Value", header]);
+    let mut table = Table::new();
+    table.load_preset(NOTHING);
+    table.set_header(vec!["Parameter", "Value", header]);
 
+    add_section(&mut table, "IP Link Settings");
     if let Some(ref l) = link {
-        add_row_u32_bytes(&mut link_table, "mtu", l.mtu, s.mtu as u32);
-        add_row_u32_bytes(&mut link_table, "min_mtu", l.min_mtu, 0);
-        add_row_u32_bytes(&mut link_table, "max_mtu", l.max_mtu, 0);
+        add_row_u32_bytes(&mut table, "  mtu", l.mtu, s.mtu as u32);
+        add_row_u32_bytes(&mut table, "  min_mtu", l.min_mtu, 0);
+        add_row_u32_bytes(&mut table, "  max_mtu", l.max_mtu, 0);
         add_row_u32(
-            &mut link_table,
-            "txqueuelen",
+            &mut table,
+            "  txqueuelen",
             l.txqueuelen,
             s.txqueuelen as u32,
         );
-        add_row_u32(&mut link_table, "num_tx_queues", l.num_tx_queues, 0);
-        add_row_u32(&mut link_table, "num_rx_queues", l.num_rx_queues, 0);
+        add_row_u32(&mut table, "  num_tx_queues", l.num_tx_queues, 0);
+        add_row_u32(&mut table, "  num_rx_queues", l.num_rx_queues, 0);
         add_row_u32_bytes(
-            &mut link_table,
-            "gso_max_size",
+            &mut table,
+            "  gso_max_size",
             l.gso_max_size,
             s.gso_max_size as u32,
         );
         add_row_u32(
-            &mut link_table,
-            "gso_max_segs",
+            &mut table,
+            "  gso_max_segs",
             l.gso_max_segs,
             s.gso_max_segs as u32,
         );
         add_row_u32_bytes(
-            &mut link_table,
-            "gro_max_size",
+            &mut table,
+            "  gro_max_size",
             l.gro_max_size,
             s.gro_max_size as u32,
         );
         add_row_u32_bytes(
-            &mut link_table,
-            "tso_max_size",
+            &mut table,
+            "  tso_max_size",
             l.tso_max_size,
             s.tso_max_size as u32,
         );
         add_row_u32(
-            &mut link_table,
-            "tso_max_segs",
+            &mut table,
+            "  tso_max_segs",
             l.tso_max_segs,
             s.tso_max_segs as u32,
         );
-        add_row_str(&mut link_table, "qdisc", l.qdisc.clone(), "-");
-        add_row_u32(&mut link_table, "group", l.group, 0);
+        add_row_str(&mut table, "  qdisc", l.qdisc.clone(), "-");
+        add_row_u32(&mut table, "  group", l.group, 0);
     } else {
-        link_table.add_row(vec!["(rtnetlink unavailable)", "-", "-"]);
+        table.add_row(vec!["  (rtnetlink unavailable)", "-", "-"]);
     }
-    println!("{link_table}");
-    println!();
 
-    let mut ethtool_table = Table::new();
-    ethtool_table.load_preset(UTF8_FULL);
-    ethtool_table.set_header(vec!["Ethtool Settings", "Value", header]);
-
+    add_section(&mut table, "Ethtool Settings");
     if let Some(ref e) = ethtool {
-        add_row_u32(&mut ethtool_table, "ring_rx", e.ring.rx, s.ring_rx as u32);
-        add_row_u32(&mut ethtool_table, "ring_rx_max", e.ring.rx_max, 0);
-        add_row_u32(&mut ethtool_table, "ring_tx", e.ring.tx, s.ring_tx as u32);
-        add_row_u32(&mut ethtool_table, "ring_tx_max", e.ring.tx_max, 0);
+        add_row_u32(&mut table, "  ring_rx", e.ring.rx, s.ring_rx as u32);
+        add_row_u32(&mut table, "  ring_rx_max", e.ring.rx_max, 0);
+        add_row_u32(&mut table, "  ring_tx", e.ring.tx, s.ring_tx as u32);
+        add_row_u32(&mut table, "  ring_tx_max", e.ring.tx_max, 0);
         add_row_u32(
-            &mut ethtool_table,
-            "coalesce_rx_usecs",
+            &mut table,
+            "  coalesce_rx_usecs",
             e.coalesce.rx_usecs,
             s.coalesce_rx_usecs as u32,
         );
         add_row_u32(
-            &mut ethtool_table,
-            "coalesce_tx_usecs",
+            &mut table,
+            "  coalesce_tx_usecs",
             e.coalesce.tx_usecs,
             s.coalesce_tx_usecs as u32,
         );
-        add_row_bool(
-            &mut ethtool_table,
-            "offload_tso",
-            e.offload.tso,
-            s.offload_tso,
-        );
-        add_row_bool(
-            &mut ethtool_table,
-            "offload_gso",
-            e.offload.gso,
-            s.offload_gso,
-        );
-        add_row_bool(
-            &mut ethtool_table,
-            "offload_gro",
-            e.offload.gro,
-            s.offload_gro,
-        );
+        add_row_bool(&mut table, "  offload_tso", e.offload.tso, s.offload_tso);
+        add_row_bool(&mut table, "  offload_gso", e.offload.gso, s.offload_gso);
+        add_row_bool(&mut table, "  offload_gro", e.offload.gro, s.offload_gro);
     } else {
-        ethtool_table.add_row(vec!["(ethtool unavailable)", "-", "-"]);
+        table.add_row(vec!["  (ethtool unavailable)", "-", "-"]);
     }
-    println!("{ethtool_table}");
+
+    println!("{table}");
+}
+
+fn add_section(table: &mut Table, name: &str) {
+    table.add_row(vec![
+        Cell::new(name).fg(Color::Cyan),
+        Cell::new(""),
+        Cell::new(""),
+    ]);
 }
 
 fn format_size(bytes: u64) -> String {
