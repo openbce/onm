@@ -85,6 +85,11 @@ pub struct SuggestedValues {
     // Interface settings (ip link)
     pub txqueuelen: u64,
     pub mtu: u64,
+    pub gso_max_size: u64,
+    pub gso_max_segs: u64,
+    pub gro_max_size: u64,
+    pub tso_max_size: u64,
+    pub tso_max_segs: u64,
     // Ethtool settings
     pub ring_rx: u64,
     pub ring_tx: u64,
@@ -143,6 +148,11 @@ impl SuggestedValues {
 
             txqueuelen: 10000, // High queue for API server traffic bursts
             mtu: 9000,         // Jumbo frames (requires network support)
+            gso_max_size: 65536,
+            gso_max_segs: 65535,
+            gro_max_size: 65536,
+            tso_max_size: 524280, // ~512KB for high throughput
+            tso_max_segs: 65535,
 
             ring_rx: 4096,
             ring_tx: 4096,
@@ -194,6 +204,11 @@ impl SuggestedValues {
 
             txqueuelen: 5000, // Moderate queue for pod traffic
             mtu: 9000,        // Jumbo frames (requires network support)
+            gso_max_size: 65536,
+            gso_max_segs: 65535,
+            gro_max_size: 65536,
+            tso_max_size: 262144, // 256KB for worker nodes
+            tso_max_segs: 65535,
 
             ring_rx: 2048,
             ring_tx: 2048,
@@ -312,49 +327,49 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
     let mut socket = Table::new();
     socket.load_preset(UTF8_FULL);
     socket.set_header(vec!["Socket Buffers", "Value", header]);
-    add_row(
+    add_row_bytes(
         &mut socket,
         "net.core.rmem_max",
         sysctl.socket_buffer.rmem_max,
         s.rmem_max,
     );
-    add_row(
+    add_row_bytes(
         &mut socket,
         "net.core.wmem_max",
         sysctl.socket_buffer.wmem_max,
         s.wmem_max,
     );
-    add_row(
+    add_row_bytes(
         &mut socket,
         "net.core.rmem_default",
         sysctl.socket_buffer.rmem_default,
         s.rmem_default,
     );
-    add_row(
+    add_row_bytes(
         &mut socket,
         "net.core.wmem_default",
         sysctl.socket_buffer.wmem_default,
         s.wmem_default,
     );
-    add_row_str(
+    add_row_tcp_mem(
         &mut socket,
         "net.ipv4.tcp_rmem",
         sysctl.socket_buffer.tcp_rmem,
         s.tcp_rmem,
     );
-    add_row_str(
+    add_row_tcp_mem(
         &mut socket,
         "net.ipv4.tcp_wmem",
         sysctl.socket_buffer.tcp_wmem,
         s.tcp_wmem,
     );
-    add_row(
+    add_row_bytes(
         &mut socket,
         "net.ipv4.udp_rmem_min",
         sysctl.socket_buffer.udp_rmem_min,
         s.udp_rmem_min,
     );
-    add_row(
+    add_row_bytes(
         &mut socket,
         "net.ipv4.udp_wmem_min",
         sysctl.socket_buffer.udp_wmem_min,
@@ -471,6 +486,174 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
     println!("{rp}");
 }
 
+pub async fn print_link_tables(name: &str, profile: TuningProfile) {
+    use libonm::eth;
+
+    let s = SuggestedValues::for_profile(profile);
+    let header = profile.header_suffix();
+
+    let link = eth::get_link_settings(name).await.ok();
+    let ethtool = eth::get_ethtool_settings(name).await.ok();
+
+    let mut link_table = Table::new();
+    link_table.load_preset(UTF8_FULL);
+    link_table.set_header(vec!["IP Link Settings", "Value", header]);
+
+    if let Some(ref l) = link {
+        add_row_u32_bytes(&mut link_table, "mtu", l.mtu, s.mtu as u32);
+        add_row_u32_bytes(&mut link_table, "min_mtu", l.min_mtu, 0);
+        add_row_u32_bytes(&mut link_table, "max_mtu", l.max_mtu, 0);
+        add_row_u32(
+            &mut link_table,
+            "txqueuelen",
+            l.txqueuelen,
+            s.txqueuelen as u32,
+        );
+        add_row_u32(&mut link_table, "num_tx_queues", l.num_tx_queues, 0);
+        add_row_u32(&mut link_table, "num_rx_queues", l.num_rx_queues, 0);
+        add_row_u32_bytes(
+            &mut link_table,
+            "gso_max_size",
+            l.gso_max_size,
+            s.gso_max_size as u32,
+        );
+        add_row_u32(
+            &mut link_table,
+            "gso_max_segs",
+            l.gso_max_segs,
+            s.gso_max_segs as u32,
+        );
+        add_row_u32_bytes(
+            &mut link_table,
+            "gro_max_size",
+            l.gro_max_size,
+            s.gro_max_size as u32,
+        );
+        add_row_u32_bytes(
+            &mut link_table,
+            "tso_max_size",
+            l.tso_max_size,
+            s.tso_max_size as u32,
+        );
+        add_row_u32(
+            &mut link_table,
+            "tso_max_segs",
+            l.tso_max_segs,
+            s.tso_max_segs as u32,
+        );
+        add_row_str(&mut link_table, "qdisc", l.qdisc.clone(), "-");
+        add_row_u32(&mut link_table, "group", l.group, 0);
+    } else {
+        link_table.add_row(vec!["(rtnetlink unavailable)", "-", "-"]);
+    }
+    println!("{link_table}");
+    println!();
+
+    let mut ethtool_table = Table::new();
+    ethtool_table.load_preset(UTF8_FULL);
+    ethtool_table.set_header(vec!["Ethtool Settings", "Value", header]);
+
+    if let Some(ref e) = ethtool {
+        add_row_u32(&mut ethtool_table, "ring_rx", e.ring.rx, s.ring_rx as u32);
+        add_row_u32(&mut ethtool_table, "ring_rx_max", e.ring.rx_max, 0);
+        add_row_u32(&mut ethtool_table, "ring_tx", e.ring.tx, s.ring_tx as u32);
+        add_row_u32(&mut ethtool_table, "ring_tx_max", e.ring.tx_max, 0);
+        add_row_u32(
+            &mut ethtool_table,
+            "coalesce_rx_usecs",
+            e.coalesce.rx_usecs,
+            s.coalesce_rx_usecs as u32,
+        );
+        add_row_u32(
+            &mut ethtool_table,
+            "coalesce_tx_usecs",
+            e.coalesce.tx_usecs,
+            s.coalesce_tx_usecs as u32,
+        );
+        add_row_bool(
+            &mut ethtool_table,
+            "offload_tso",
+            e.offload.tso,
+            s.offload_tso,
+        );
+        add_row_bool(
+            &mut ethtool_table,
+            "offload_gso",
+            e.offload.gso,
+            s.offload_gso,
+        );
+        add_row_bool(
+            &mut ethtool_table,
+            "offload_gro",
+            e.offload.gro,
+            s.offload_gro,
+        );
+    } else {
+        ethtool_table.add_row(vec!["(ethtool unavailable)", "-", "-"]);
+    }
+    println!("{ethtool_table}");
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{}G", bytes / 1_073_741_824)
+    } else if bytes >= 1_048_576 {
+        format!("{}M", bytes / 1_048_576)
+    } else if bytes >= 1024 {
+        format!("{}K", bytes / 1024)
+    } else {
+        bytes.to_string()
+    }
+}
+
+fn format_size_u32(bytes: u32) -> String {
+    format_size(bytes as u64)
+}
+
+fn format_tcp_mem(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|s| s.parse::<u64>().map(format_size).unwrap_or(s.to_string()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn add_row_u32(table: &mut Table, name: &str, value: Option<u32>, suggested: u32) {
+    let suggested_str = if suggested == 0 {
+        "-".to_string()
+    } else {
+        suggested.to_string()
+    };
+    table.add_row(vec![
+        name.to_string(),
+        value.map(|v| v.to_string()).unwrap_or("-".to_string()),
+        suggested_str,
+    ]);
+}
+
+fn add_row_u32_bytes(table: &mut Table, name: &str, value: Option<u32>, suggested: u32) {
+    let suggested_str = if suggested == 0 {
+        "-".to_string()
+    } else {
+        format_size_u32(suggested)
+    };
+    table.add_row(vec![
+        name.to_string(),
+        value.map(|v| format_size_u32(v)).unwrap_or("-".to_string()),
+        suggested_str,
+    ]);
+}
+
+fn add_row_bool(table: &mut Table, name: &str, value: Option<bool>, suggested: bool) {
+    table.add_row(vec![
+        name.to_string(),
+        value
+            .map(|v| if v { "on" } else { "off" }.to_string())
+            .unwrap_or("-".to_string()),
+        if suggested { "on" } else { "off" }.to_string(),
+    ]);
+}
+
 fn add_row(table: &mut Table, name: &str, value: Option<u64>, suggested: u64) {
     table.add_row(vec![
         name.to_string(),
@@ -479,11 +662,27 @@ fn add_row(table: &mut Table, name: &str, value: Option<u64>, suggested: u64) {
     ]);
 }
 
+fn add_row_bytes(table: &mut Table, name: &str, value: Option<u64>, suggested: u64) {
+    table.add_row(vec![
+        name.to_string(),
+        value.map(|v| format_size(v)).unwrap_or("-".to_string()),
+        format_size(suggested),
+    ]);
+}
+
 fn add_row_str(table: &mut Table, name: &str, value: Option<String>, suggested: &str) {
     table.add_row(vec![
         name.to_string(),
         value.unwrap_or("-".to_string()),
         suggested.to_string(),
+    ]);
+}
+
+fn add_row_tcp_mem(table: &mut Table, name: &str, value: Option<String>, suggested: &str) {
+    table.add_row(vec![
+        name.to_string(),
+        value.map(|v| format_tcp_mem(&v)).unwrap_or("-".to_string()),
+        format_tcp_mem(suggested),
     ]);
 }
 
@@ -666,6 +865,102 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             println!("done");
             println!();
             println!("echo 'Network tuning applied successfully'");
+        }
+    }
+}
+
+pub async fn generate_link_output(name: &str, profile: TuningProfile, format: OutputFormat) {
+    use libonm::eth;
+
+    let s = SuggestedValues::for_profile(profile);
+    let link = eth::get_link_settings(name).await.ok();
+
+    let tso = if s.offload_tso { "on" } else { "off" };
+    let gso = if s.offload_gso { "on" } else { "off" };
+    let gro = if s.offload_gro { "on" } else { "off" };
+
+    match format {
+        OutputFormat::Cmd => {
+            println!("ip link set dev {} txqueuelen {}", name, s.txqueuelen);
+            println!("ip link set dev {} mtu {}", name, s.mtu);
+            println!();
+            println!("ethtool -G {} rx {} tx {}", name, s.ring_rx, s.ring_tx);
+            println!(
+                "ethtool -C {} rx-usecs {} tx-usecs {}",
+                name, s.coalesce_rx_usecs, s.coalesce_tx_usecs
+            );
+            println!("ethtool -K {} tso {} gso {} gro {}", name, tso, gso, gro);
+
+            if let Some(ref l) = link {
+                println!();
+                println!("# Current values for {}:", name);
+                if let Some(v) = l.mtu {
+                    println!("#   mtu: {}", v);
+                }
+                if let Some(v) = l.txqueuelen {
+                    println!("#   txqueuelen: {}", v);
+                }
+                if let Some(v) = l.gso_max_size {
+                    println!("#   gso_max_size: {}", v);
+                }
+                if let Some(v) = l.tso_max_size {
+                    println!("#   tso_max_size: {}", v);
+                }
+            }
+        }
+        OutputFormat::Conf => {
+            println!(
+                "# IP link and ethtool tuning for {} ({} profile)",
+                name,
+                profile.name()
+            );
+            println!("# Apply via script or systemd unit");
+            println!();
+            println!("# ip link settings:");
+            println!("ip link set dev {} txqueuelen {}", name, s.txqueuelen);
+            println!(
+                "# ip link set dev {} mtu {} (requires network-wide jumbo frame support)",
+                name, s.mtu
+            );
+            println!();
+            println!("# ethtool settings:");
+            println!("ethtool -G {} rx {} tx {}", name, s.ring_rx, s.ring_tx);
+            println!(
+                "ethtool -C {} rx-usecs {} tx-usecs {}",
+                name, s.coalesce_rx_usecs, s.coalesce_tx_usecs
+            );
+            println!("ethtool -K {} tso {} gso {} gro {}", name, tso, gso, gro);
+        }
+        OutputFormat::Script => {
+            println!("#!/bin/bash");
+            println!(
+                "# IP link and ethtool tuning for {} ({} profile)",
+                name,
+                profile.name()
+            );
+            println!("# Run with: sudo bash <script>");
+            println!();
+            println!("set -e");
+            println!("IFACE={}", name);
+            println!();
+            println!("ip link set dev \"$IFACE\" txqueuelen {}", s.txqueuelen);
+            println!("# MTU {} requires network-wide jumbo frame support", s.mtu);
+            println!("# ip link set dev \"$IFACE\" mtu {}", s.mtu);
+            println!();
+            println!(
+                "ethtool -G \"$IFACE\" rx {} tx {} 2>/dev/null || true",
+                s.ring_rx, s.ring_tx
+            );
+            println!(
+                "ethtool -C \"$IFACE\" rx-usecs {} tx-usecs {} 2>/dev/null || true",
+                s.coalesce_rx_usecs, s.coalesce_tx_usecs
+            );
+            println!(
+                "ethtool -K \"$IFACE\" tso {} gso {} gro {} 2>/dev/null || true",
+                tso, gso, gro
+            );
+            println!();
+            println!("echo 'Link tuning for {} applied successfully'", name);
         }
     }
 }

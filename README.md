@@ -49,6 +49,12 @@ ethctl sysctl -p control-plane -g script > tune-sysctl.sh
 # Build
 docker build -t openbce/onm-shell .
 
-# Run (privileged + host network for device access)
-docker run -it --rm --privileged --network host openbce/onm-shell bash
+# Run as daemon (privileged + host network for device access)
+docker run -d --name onm-shell --privileged --network host openbce/onm-shell
+
+# Enter shell
+docker exec -it onm-shell bash
+
+# Stop and remove
+docker stop onm-shell && docker rm onm-shell
 ```

@@ -1,11 +1,13 @@
 mod types;
 
+use futures::TryStreamExt;
 use std::fs;
 use std::path::Path;
 
 pub use types::{
-    ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, InterfaceStats,
-    LinkState, NetworkStats, NetworkSysctl, RpFilterSettings, SocketBufferSettings, SocketStats,
+    ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
+    EthtoolOffload, EthtoolRing, EthtoolSettings, InterfaceStats, LinkSettings, LinkState,
+    NetworkStats, NetworkSysctl, RpFilterSettings, SocketBufferSettings, SocketStats,
     SoftnetCpuStats, SoftnetStats, TcpSettings,
 };
 
@@ -340,4 +342,95 @@ fn read_stat_file(base: &Path, file: &str) -> u64 {
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
+}
+
+pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthError> {
+    use ethtool::{EthtoolCoalesceAttr, EthtoolFeatureAttr, EthtoolHandle, EthtoolRingAttr};
+
+    let (conn, handle, _) = ethtool::new_connection()
+        .map_err(|e| EthError::Internal(format!("Failed to create ethtool connection: {}", e)))?;
+    tokio::spawn(conn);
+
+    let mut ethtool_handle = EthtoolHandle::new(handle);
+
+    let mut settings = EthtoolSettings::default();
+
+    if let Ok(mut rings) = ethtool_handle.ring().get(Some(name)).execute().await {
+        while let Some(msg) = rings.try_next().await.ok().flatten() {
+            for attr in msg.payload.nlas {
+                match attr {
+                    EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
+                    EthtoolRingAttr::Rx(v) => settings.ring.rx = Some(v),
+                    EthtoolRingAttr::TxMax(v) => settings.ring.tx_max = Some(v),
+                    EthtoolRingAttr::Tx(v) => settings.ring.tx = Some(v),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if let Ok(mut coalesces) = ethtool_handle.coalesce().get(Some(name)).execute().await {
+        while let Some(msg) = coalesces.try_next().await.ok().flatten() {
+            for attr in msg.payload.nlas {
+                match attr {
+                    EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
+                    EthtoolCoalesceAttr::TxUsecs(v) => settings.coalesce.tx_usecs = Some(v),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if let Ok(mut features) = ethtool_handle.feature().get(Some(name)).execute().await {
+        while let Some(msg) = features.try_next().await.ok().flatten() {
+            for attr in msg.payload.nlas {
+                if let EthtoolFeatureAttr::Features(bits) = attr {
+                    for bit in bits {
+                        match bit.name.as_str() {
+                            "tx-tcp-segmentation" => settings.offload.tso = Some(bit.active),
+                            "tx-generic-segmentation" => settings.offload.gso = Some(bit.active),
+                            "rx-gro" => settings.offload.gro = Some(bit.active),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(settings)
+}
+
+pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
+    use netlink_packet_route::link::LinkAttribute;
+
+    let (conn, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| EthError::Internal(format!("Failed to create rtnetlink connection: {}", e)))?;
+    tokio::spawn(conn);
+
+    let mut settings = LinkSettings::default();
+
+    let mut links = handle.link().get().match_name(name.to_string()).execute();
+    if let Some(link) = links.try_next().await.ok().flatten() {
+        for attr in link.attributes {
+            match attr {
+                LinkAttribute::Mtu(v) => settings.mtu = Some(v),
+                LinkAttribute::MinMtu(v) => settings.min_mtu = Some(v),
+                LinkAttribute::MaxMtu(v) => settings.max_mtu = Some(v),
+                LinkAttribute::TxQueueLen(v) => settings.txqueuelen = Some(v),
+                LinkAttribute::NumTxQueues(v) => settings.num_tx_queues = Some(v),
+                LinkAttribute::NumRxQueues(v) => settings.num_rx_queues = Some(v),
+                LinkAttribute::GsoMaxSize(v) => settings.gso_max_size = Some(v),
+                LinkAttribute::GsoMaxSegs(v) => settings.gso_max_segs = Some(v),
+                LinkAttribute::GroMaxSize(v) => settings.gro_max_size = Some(v),
+                LinkAttribute::TsoMaxSize(v) => settings.tso_max_size = Some(v),
+                LinkAttribute::TsoMaxSegs(v) => settings.tso_max_segs = Some(v),
+                LinkAttribute::Qdisc(v) => settings.qdisc = Some(v),
+                LinkAttribute::Group(v) => settings.group = Some(v),
+                _ => {}
+            }
+        }
+    }
+
+    Ok(settings)
 }

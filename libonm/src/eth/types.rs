@@ -185,3 +185,48 @@ pub struct NetworkStats {
     pub softnet: SoftnetStats,
     pub sockets: SocketStats,
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EthtoolRing {
+    pub rx: Option<u32>,
+    pub rx_max: Option<u32>,
+    pub tx: Option<u32>,
+    pub tx_max: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EthtoolCoalesce {
+    pub rx_usecs: Option<u32>,
+    pub tx_usecs: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EthtoolOffload {
+    pub tso: Option<bool>,
+    pub gso: Option<bool>,
+    pub gro: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EthtoolSettings {
+    pub ring: EthtoolRing,
+    pub coalesce: EthtoolCoalesce,
+    pub offload: EthtoolOffload,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LinkSettings {
+    pub mtu: Option<u32>,
+    pub min_mtu: Option<u32>,
+    pub max_mtu: Option<u32>,
+    pub txqueuelen: Option<u32>,
+    pub num_tx_queues: Option<u32>,
+    pub num_rx_queues: Option<u32>,
+    pub gso_max_size: Option<u32>,
+    pub gso_max_segs: Option<u32>,
+    pub gro_max_size: Option<u32>,
+    pub tso_max_size: Option<u32>,
+    pub tso_max_segs: Option<u32>,
+    pub qdisc: Option<String>,
+    pub group: Option<u32>,
+}

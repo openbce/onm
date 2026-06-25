@@ -25,3 +25,6 @@ http = "1.4"
 bytes = "1"
 base64 = "0.22"
 url = { version = "2", features = ["serde"] }
+ethtool = "0.2"
+rtnetlink = "0.21"
+futures = "0.3"
