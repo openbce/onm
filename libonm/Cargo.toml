@@ -21,11 +21,11 @@ bytes = { workspace = true }
 base64 = { workspace = true }
 url = { workspace = true }
 
-numeric_cast = "0.2"
+numeric_cast = "0.3"
 libudev = "0.3"
 scopeguard = "1.2"
 
 
 [build-dependencies]
-bindgen = "0.70"
-cc = "1.0"
+bindgen = "0.72"
+cc = "1.2"
