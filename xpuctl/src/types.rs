@@ -17,21 +17,18 @@ pub struct Context {
     pub bmc: Vec<BMC>,
 }
 
-const DEFAULT_USER: &str = "root";
-const DEFAULT_PASSWORD: &str = "0penBmc";
-
-impl From<&BMC> for libonm::xpu::BMC {
-    fn from(bmc: &BMC) -> Self {
+impl From<(&BMC, &str, &str)> for libonm::xpu::BMC {
+    fn from((bmc, default_user, default_pass): (&BMC, &str, &str)) -> Self {
         libonm::xpu::BMC {
             username: bmc
                 .username
                 .clone()
-                .unwrap_or_else(|| DEFAULT_USER.to_string()),
+                .unwrap_or_else(|| default_user.to_string()),
             address: bmc.address.clone(),
             password: bmc
                 .password
                 .clone()
-                .unwrap_or_else(|| DEFAULT_PASSWORD.to_string()),
+                .unwrap_or_else(|| default_pass.to_string()),
         }
     }
 }
