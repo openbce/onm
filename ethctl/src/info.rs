@@ -63,8 +63,7 @@ pub struct SuggestedValues {
     pub wmem_default: u64,
     pub tcp_rmem: &'static str,
     pub tcp_wmem: &'static str,
-    pub udp_rmem_min: u64,
-    pub udp_wmem_min: u64,
+    pub netdev_max_backlog: u64,
     // TCP settings
     pub somaxconn: u64,
     pub tcp_max_syn_backlog: u64,
@@ -74,6 +73,10 @@ pub struct SuggestedValues {
     pub tcp_keepalive_probes: u64,
     pub tcp_keepalive_intvl: u64,
     pub ip_local_port_range: &'static str,
+    // UDP settings
+    pub udp_rmem_min: u64,
+    pub udp_wmem_min: u64,
+    pub udp_mem: &'static str,
     // ARP/Neighbor
     pub arp_gc_thresh1: u64,
     pub arp_gc_thresh2: u64,
@@ -126,8 +129,7 @@ impl SuggestedValues {
             wmem_default: 33_554_432,
             tcp_rmem: "4096 2097152 268435456",
             tcp_wmem: "4096 2097152 268435456",
-            udp_rmem_min: 16_384,
-            udp_wmem_min: 16_384,
+            netdev_max_backlog: 50000,
 
             somaxconn: 65535,
             tcp_max_syn_backlog: 65535,
@@ -137,6 +139,10 @@ impl SuggestedValues {
             tcp_keepalive_probes: 3,
             tcp_keepalive_intvl: 15,
             ip_local_port_range: "1024 65535",
+
+            udp_rmem_min: 16_384,
+            udp_wmem_min: 16_384,
+            udp_mem: "1048576 4194304 16777216",
 
             arp_gc_thresh1: 16384, // Must hold all 10k node entries
             arp_gc_thresh2: 65536,
@@ -182,8 +188,7 @@ impl SuggestedValues {
             wmem_default: 16_777_216,
             tcp_rmem: "4096 1048576 134217728",
             tcp_wmem: "4096 1048576 134217728",
-            udp_rmem_min: 16_384,
-            udp_wmem_min: 16_384,
+            netdev_max_backlog: 30000,
 
             somaxconn: 32768,
             tcp_max_syn_backlog: 32768,
@@ -193,6 +198,10 @@ impl SuggestedValues {
             tcp_keepalive_probes: 3,
             tcp_keepalive_intvl: 15,
             ip_local_port_range: "1024 65535",
+
+            udp_rmem_min: 16_384,
+            udp_wmem_min: 16_384,
+            udp_mem: "786432 2097152 8388608",
 
             arp_gc_thresh1: 4096, // Local subnet typically
             arp_gc_thresh2: 8192,
@@ -370,17 +379,11 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         sysctl.socket_buffer.tcp_wmem.clone(),
         s.tcp_wmem,
     );
-    add_row_bytes(
+    add_row(
         table,
-        "  net.ipv4.udp_rmem_min",
-        sysctl.socket_buffer.udp_rmem_min,
-        s.udp_rmem_min,
-    );
-    add_row_bytes(
-        table,
-        "  net.ipv4.udp_wmem_min",
-        sysctl.socket_buffer.udp_wmem_min,
-        s.udp_wmem_min,
+        "  net.core.netdev_max_backlog",
+        sysctl.socket_buffer.netdev_max_backlog,
+        s.netdev_max_backlog,
     );
 
     add_section(table, "TCP Settings");
@@ -431,6 +434,26 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         "  net.ipv4.ip_local_port_range",
         sysctl.tcp.ip_local_port_range.clone(),
         s.ip_local_port_range,
+    );
+
+    add_section(table, "UDP Settings");
+    add_row_bytes(
+        table,
+        "  net.ipv4.udp_rmem_min",
+        sysctl.udp.rmem_min,
+        s.udp_rmem_min,
+    );
+    add_row_bytes(
+        table,
+        "  net.ipv4.udp_wmem_min",
+        sysctl.udp.wmem_min,
+        s.udp_wmem_min,
+    );
+    add_row_tcp_mem(
+        table,
+        "  net.ipv4.udp_mem",
+        sysctl.udp.udp_mem.clone(),
+        s.udp_mem,
     );
 
     add_section(table, "ARP / Neighbor Table");
@@ -718,8 +741,10 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
         ("net.core.wmem_default", s.wmem_default.to_string()),
         ("net.ipv4.tcp_rmem", s.tcp_rmem.to_string()),
         ("net.ipv4.tcp_wmem", s.tcp_wmem.to_string()),
-        ("net.ipv4.udp_rmem_min", s.udp_rmem_min.to_string()),
-        ("net.ipv4.udp_wmem_min", s.udp_wmem_min.to_string()),
+        (
+            "net.core.netdev_max_backlog",
+            s.netdev_max_backlog.to_string(),
+        ),
         ("net.core.somaxconn", s.somaxconn.to_string()),
         (
             "net.ipv4.tcp_max_syn_backlog",
@@ -743,6 +768,9 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             "net.ipv4.ip_local_port_range",
             s.ip_local_port_range.to_string(),
         ),
+        ("net.ipv4.udp_rmem_min", s.udp_rmem_min.to_string()),
+        ("net.ipv4.udp_wmem_min", s.udp_wmem_min.to_string()),
+        ("net.ipv4.udp_mem", s.udp_mem.to_string()),
         (
             "net.ipv4.neigh.default.gc_thresh1",
             s.arp_gc_thresh1.to_string(),

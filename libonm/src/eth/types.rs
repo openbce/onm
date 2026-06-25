@@ -82,8 +82,7 @@ pub struct SocketBufferSettings {
     pub wmem_default: Option<u64>,
     pub tcp_rmem: Option<String>,
     pub tcp_wmem: Option<String>,
-    pub udp_rmem_min: Option<u64>,
-    pub udp_wmem_min: Option<u64>,
+    pub netdev_max_backlog: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -96,6 +95,13 @@ pub struct TcpSettings {
     pub keepalive_probes: Option<u64>,
     pub keepalive_intvl: Option<u64>,
     pub ip_local_port_range: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UdpSettings {
+    pub rmem_min: Option<u64>,
+    pub wmem_min: Option<u64>,
+    pub udp_mem: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -118,6 +124,7 @@ pub struct NetworkSysctl {
     pub conntrack: ConntrackSettings,
     pub socket_buffer: SocketBufferSettings,
     pub tcp: TcpSettings,
+    pub udp: UdpSettings,
     pub arp: ArpSettings,
     pub rp_filter: RpFilterSettings,
 }

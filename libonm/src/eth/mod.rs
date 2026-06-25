@@ -8,7 +8,7 @@ pub use types::{
     ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
     EthtoolOffload, EthtoolRing, EthtoolSettings, InterfaceStats, LinkSettings, LinkState,
     NetworkStats, NetworkSysctl, RpFilterSettings, SocketBufferSettings, SocketStats,
-    SoftnetCpuStats, SoftnetStats, TcpSettings,
+    SoftnetCpuStats, SoftnetStats, TcpSettings, UdpSettings,
 };
 
 const SYS_CLASS_NET: &str = "/sys/class/net";
@@ -151,8 +151,7 @@ pub fn get_network_sysctl() -> NetworkSysctl {
             wmem_default: read_sysctl_u64("net.core.wmem_default"),
             tcp_rmem: read_sysctl("net.ipv4.tcp_rmem"),
             tcp_wmem: read_sysctl("net.ipv4.tcp_wmem"),
-            udp_rmem_min: read_sysctl_u64("net.ipv4.udp_rmem_min"),
-            udp_wmem_min: read_sysctl_u64("net.ipv4.udp_wmem_min"),
+            netdev_max_backlog: read_sysctl_u64("net.core.netdev_max_backlog"),
         },
         tcp: TcpSettings {
             somaxconn: read_sysctl_u64("net.core.somaxconn"),
@@ -163,6 +162,11 @@ pub fn get_network_sysctl() -> NetworkSysctl {
             keepalive_probes: read_sysctl_u64("net.ipv4.tcp_keepalive_probes"),
             keepalive_intvl: read_sysctl_u64("net.ipv4.tcp_keepalive_intvl"),
             ip_local_port_range: read_sysctl("net.ipv4.ip_local_port_range"),
+        },
+        udp: UdpSettings {
+            rmem_min: read_sysctl_u64("net.ipv4.udp_rmem_min"),
+            wmem_min: read_sysctl_u64("net.ipv4.udp_wmem_min"),
+            udp_mem: read_sysctl("net.ipv4.udp_mem"),
         },
         arp: ArpSettings {
             gc_thresh1: read_sysctl_u64("net.ipv4.neigh.default.gc_thresh1"),
