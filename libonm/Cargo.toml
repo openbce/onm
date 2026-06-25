@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 ethtool = { workspace = true }
 rtnetlink = { workspace = true }
+netlink-packet-route = { workspace = true }
 futures = { workspace = true }
 
 reqwest = { workspace = true }

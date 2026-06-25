@@ -1,5 +1,6 @@
 mod types;
 
+use futures::stream::StreamExt;
 use futures::TryStreamExt;
 use std::fs;
 use std::path::Path;
@@ -345,51 +346,53 @@ fn read_stat_file(base: &Path, file: &str) -> u64 {
 }
 
 pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthError> {
-    use ethtool::{EthtoolCoalesceAttr, EthtoolFeatureAttr, EthtoolHandle, EthtoolRingAttr};
+    use ethtool::{EthtoolAttr, EthtoolCoalesceAttr, EthtoolFeatureAttr, EthtoolRingAttr};
 
-    let (conn, handle, _) = ethtool::new_connection()
+    let (conn, mut handle, _) = ethtool::new_connection()
         .map_err(|e| EthError::Internal(format!("Failed to create ethtool connection: {}", e)))?;
     tokio::spawn(conn);
 
-    let mut ethtool_handle = EthtoolHandle::new(handle);
-
     let mut settings = EthtoolSettings::default();
 
-    if let Ok(mut rings) = ethtool_handle.ring().get(Some(name)).execute().await {
-        while let Some(msg) = rings.try_next().await.ok().flatten() {
-            for attr in msg.payload.nlas {
-                match attr {
-                    EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
-                    EthtoolRingAttr::Rx(v) => settings.ring.rx = Some(v),
-                    EthtoolRingAttr::TxMax(v) => settings.ring.tx_max = Some(v),
-                    EthtoolRingAttr::Tx(v) => settings.ring.tx = Some(v),
-                    _ => {}
+    if let Ok(mut rings) = handle.ring().get(Some(name)).execute().await {
+        while let Some(Ok(msg)) = rings.next().await {
+            for attr in msg.nlas {
+                if let EthtoolAttr::Ring(ring_attr) = attr {
+                    match ring_attr {
+                        EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
+                        EthtoolRingAttr::Rx(v) => settings.ring.rx = Some(v),
+                        EthtoolRingAttr::TxMax(v) => settings.ring.tx_max = Some(v),
+                        EthtoolRingAttr::Tx(v) => settings.ring.tx = Some(v),
+                        _ => {}
+                    }
                 }
             }
         }
     }
 
-    if let Ok(mut coalesces) = ethtool_handle.coalesce().get(Some(name)).execute().await {
-        while let Some(msg) = coalesces.try_next().await.ok().flatten() {
-            for attr in msg.payload.nlas {
-                match attr {
-                    EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
-                    EthtoolCoalesceAttr::TxUsecs(v) => settings.coalesce.tx_usecs = Some(v),
-                    _ => {}
+    if let Ok(mut coalesces) = handle.coalesce().get(Some(name)).execute().await {
+        while let Some(Ok(msg)) = coalesces.next().await {
+            for attr in msg.nlas {
+                if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
+                    match coalesce_attr {
+                        EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
+                        EthtoolCoalesceAttr::TxUsecs(v) => settings.coalesce.tx_usecs = Some(v),
+                        _ => {}
+                    }
                 }
             }
         }
     }
 
-    if let Ok(mut features) = ethtool_handle.feature().get(Some(name)).execute().await {
-        while let Some(msg) = features.try_next().await.ok().flatten() {
-            for attr in msg.payload.nlas {
-                if let EthtoolFeatureAttr::Features(bits) = attr {
+    if let Ok(mut features) = handle.feature().get(Some(name)).execute().await {
+        while let Some(Ok(msg)) = features.next().await {
+            for attr in msg.nlas {
+                if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
                     for bit in bits {
                         match bit.name.as_str() {
-                            "tx-tcp-segmentation" => settings.offload.tso = Some(bit.active),
-                            "tx-generic-segmentation" => settings.offload.gso = Some(bit.active),
-                            "rx-gro" => settings.offload.gro = Some(bit.active),
+                            "tx-tcp-segmentation" => settings.offload.tso = Some(bit.value),
+                            "tx-generic-segmentation" => settings.offload.gso = Some(bit.value),
+                            "rx-gro" => settings.offload.gro = Some(bit.value),
                             _ => {}
                         }
                     }
