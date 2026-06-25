@@ -5,7 +5,6 @@ use tracing_subscriber::{filter::EnvFilter, filter::LevelFilter, fmt, prelude::*
 mod info;
 mod link;
 mod list;
-mod sysctl;
 
 #[derive(Parser)]
 #[command(name = "ethctl")]
@@ -21,22 +20,11 @@ struct Args {
 enum Commands {
     /// List all ethernet interfaces
     List,
-    /// Show detailed information of an interface and network sysctl settings
+    /// Show network tuning info with all interfaces and suggested values
     Info {
-        #[arg(short, long)]
-        name: String,
         /// Tuning profile for suggested values: control-plane, worker (default: worker)
         #[arg(short, long, default_value = "worker")]
         profile: String,
-    },
-    /// Show network sysctl tuning parameters
-    Sysctl {
-        /// Tuning profile for suggested values: control-plane, worker (default: worker)
-        #[arg(short, long, default_value = "worker")]
-        profile: String,
-        /// Generate commands to apply suggested values: cmd, conf, script (default: cmd)
-        #[arg(short, long, default_missing_value = "cmd", num_args = 0..=1)]
-        generate: Option<String>,
     },
     /// Show ip link and ethtool settings with suggested values
     Link {
@@ -66,8 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::List => list::run()?,
-        Commands::Info { name, profile } => info::run(&name, &profile)?,
-        Commands::Sysctl { profile, generate } => sysctl::run(&profile, generate.as_deref()),
+        Commands::Info { profile } => info::run(&profile)?,
         Commands::Link {
             name,
             profile,

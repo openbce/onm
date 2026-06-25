@@ -227,8 +227,8 @@ impl SuggestedValues {
     }
 }
 
-pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
-    let iface = eth::get_interface(name)?;
+pub fn run(profile_str: &str) -> Result<(), EthError> {
+    let interfaces = eth::list_interfaces()?;
     let profile = TuningProfile::from_str(profile_str);
     let s = SuggestedValues::for_profile(profile);
     let sysctl = eth::get_network_sysctl();
@@ -238,64 +238,70 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
 
     add_first_section(&mut table, "Overview");
     table.add_row(vec!["  Profile", profile.name(), "-"]);
-    table.add_row(vec!["  Name", &iface.name, "-"]);
-    table.add_row(vec!["  MAC Address", &iface.mac_address, "-"]);
-    table.add_row(vec![
-        "  MTU",
-        &iface.mtu.to_string(),
-        &format!("{} (jumbo)", s.mtu),
-    ]);
-    table.add_row(vec![
-        "  TX Queue Length",
-        &iface.txqueuelen.to_string(),
-        &s.txqueuelen.to_string(),
-    ]);
-    table.add_row(vec!["  State", &iface.state.to_string(), "-"]);
-    table.add_row(vec![
-        "  Carrier",
-        &iface
-            .carrier
-            .map(|c| if c { "yes" } else { "no" }.to_string())
-            .unwrap_or("-".to_string()),
-        "-",
-    ]);
-    table.add_row(vec![
-        "  Speed",
-        &iface
-            .speed
-            .map(|sp| format!("{} Mbps", sp))
-            .unwrap_or("-".to_string()),
-        "-",
-    ]);
-    table.add_row(vec![
-        "  Duplex",
-        &iface.duplex.clone().unwrap_or("-".to_string()),
-        "-",
-    ]);
-    table.add_row(vec![
-        "  NUMA Node",
-        &iface
-            .numa_node
-            .map(|n| n.to_string())
-            .unwrap_or("-".to_string()),
-        "-",
-    ]);
-    table.add_row(vec![
-        "  Driver",
-        &iface.driver.clone().unwrap_or("-".to_string()),
-        "-",
-    ]);
-    table.add_row(vec![
-        "  PCI Slot",
-        &iface.pci_slot.clone().unwrap_or("-".to_string()),
-        "-",
-    ]);
 
     add_sysctl_rows(&mut table, &sysctl, &s);
 
     println!("{table}");
+    println!();
+
+    print_interfaces_table(&interfaces, &s);
 
     Ok(())
+}
+
+fn print_interfaces_table(interfaces: &[eth::EthInterface], s: &SuggestedValues) {
+    let mut table = Table::new();
+    table.load_preset(NOTHING);
+
+    add_first_section(&mut table, "Interfaces");
+    table.add_row(vec![
+        Cell::new("  Name"),
+        Cell::new("MAC Address"),
+        Cell::new("MTU"),
+        Cell::new("TXQ"),
+        Cell::new("State"),
+        Cell::new("Speed"),
+        Cell::new("Duplex"),
+        Cell::new("NUMA"),
+        Cell::new("Driver"),
+    ]);
+
+    for iface in interfaces {
+        let mtu_str = format_with_suggested(iface.mtu as u64, s.mtu);
+        let txq_str = format_with_suggested(iface.txqueuelen as u64, s.txqueuelen);
+        let speed_str = iface
+            .speed
+            .map(|sp| format!("{}", sp))
+            .unwrap_or("-".to_string());
+        let duplex_str = iface.duplex.clone().unwrap_or("-".to_string());
+        let numa_str = iface
+            .numa_node
+            .map(|n| n.to_string())
+            .unwrap_or("-".to_string());
+        let driver_str = iface.driver.clone().unwrap_or("-".to_string());
+
+        table.add_row(vec![
+            format!("  {}", iface.name),
+            iface.mac_address.clone(),
+            mtu_str,
+            txq_str,
+            iface.state.to_string(),
+            speed_str,
+            duplex_str,
+            numa_str,
+            driver_str,
+        ]);
+    }
+
+    println!("{table}");
+}
+
+fn format_with_suggested(current: u64, suggested: u64) -> String {
+    if current == suggested {
+        current.to_string()
+    } else {
+        format!("{} ({})", current, suggested)
+    }
 }
 
 pub fn print_sysctl_tables(profile: TuningProfile) {
