@@ -51,11 +51,6 @@ pub fn get_interface(name: &str) -> Result<EthInterface, EthError> {
 }
 
 fn is_ethernet_device(path: &Path) -> bool {
-    let device_path = path.join("device");
-    if !device_path.exists() {
-        return false;
-    }
-
     let type_path = path.join("type");
     if let Ok(type_content) = fs::read_to_string(&type_path) {
         if let Ok(dev_type) = type_content.trim().parse::<u32>() {
