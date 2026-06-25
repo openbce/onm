@@ -1,9 +1,9 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get -y install \
     tcpdump iproute2 net-tools bridge-utils ipmitool \
     build-essential protobuf-compiler libudev-dev pkg-config libclang-dev libibverbs-dev libpci-dev \
-    libcairo2-dev libgirepository1.0-dev python3 python3-pip python3-gi network-manager-dev libibumad-dev libibmad-dev\
+    libcairo2-dev libgirepository1.0-dev python3 python3-pip python3-gi network-manager-dev libibumad-dev libibmad-dev \
     git vim curl pciutils apt-transport-https ca-certificates jq
 
 # Install keyring of k8s
@@ -14,12 +14,14 @@ RUN echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://p
 
 RUN apt-get update && apt-get install -y kubectl
 
-# Install Rust and Cargo
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y -q
+# Install latest stable Rust and Cargo
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y -q --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install tools
-RUN $HOME/.cargo/bin/cargo install --git https://github.com/openbce/onm smctl
-RUN $HOME/.cargo/bin/cargo install --git https://github.com/openbce/onm hcactl
-RUN $HOME/.cargo/bin/cargo install --git https://github.com/openbce/onm xpuctl
+RUN cargo install --git https://github.com/openbce/onm smctl
+RUN cargo install --git https://github.com/openbce/onm hcactl
+RUN cargo install --git https://github.com/openbce/onm xpuctl
+RUN cargo install --git https://github.com/openbce/onm ethctl
 
 ENTRYPOINT ["sh", "-c", "exec tail -f /dev/null"]
