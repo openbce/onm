@@ -82,8 +82,17 @@ pub struct SuggestedValues {
     pub arp_announce: u64,
     // RP filter
     pub rp_filter: u64,
-    // Interface settings
+    // Interface settings (ip link)
     pub txqueuelen: u64,
+    pub mtu: u64,
+    // Ethtool settings
+    pub ring_rx: u64,
+    pub ring_tx: u64,
+    pub coalesce_rx_usecs: u64,
+    pub coalesce_tx_usecs: u64,
+    pub offload_tso: bool,
+    pub offload_gso: bool,
+    pub offload_gro: bool,
 }
 
 impl SuggestedValues {
@@ -133,6 +142,15 @@ impl SuggestedValues {
             rp_filter: 0,
 
             txqueuelen: 10000, // High queue for API server traffic bursts
+            mtu: 9000,         // Jumbo frames (requires network support)
+
+            ring_rx: 4096,
+            ring_tx: 4096,
+            coalesce_rx_usecs: 50, // Balance latency vs CPU
+            coalesce_tx_usecs: 50,
+            offload_tso: true,
+            offload_gso: true,
+            offload_gro: true,
         }
     }
 
@@ -175,6 +193,15 @@ impl SuggestedValues {
             rp_filter: 0,
 
             txqueuelen: 5000, // Moderate queue for pod traffic
+            mtu: 9000,        // Jumbo frames (requires network support)
+
+            ring_rx: 2048,
+            ring_tx: 2048,
+            coalesce_rx_usecs: 100, // Higher coalescing for throughput
+            coalesce_tx_usecs: 100,
+            offload_tso: true,
+            offload_gso: true,
+            offload_gro: true,
         }
     }
 }
@@ -189,7 +216,11 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
     iface_table.set_header(vec!["Interface Property", "Value", profile.header_suffix()]);
     iface_table.add_row(vec!["Name", &iface.name, "-"]);
     iface_table.add_row(vec!["MAC Address", &iface.mac_address, "-"]);
-    iface_table.add_row(vec!["MTU", &iface.mtu.to_string(), "-"]);
+    iface_table.add_row(vec![
+        "MTU",
+        &iface.mtu.to_string(),
+        &format!("{} (jumbo)", s.mtu),
+    ]);
     iface_table.add_row(vec![
         "TX Queue Length",
         &iface.txqueuelen.to_string(),
@@ -200,7 +231,7 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
         "Speed",
         &iface
             .speed
-            .map(|s| format!("{} Mbps", s))
+            .map(|sp| format!("{} Mbps", sp))
             .unwrap_or("-".to_string()),
         "-",
     ]);
@@ -537,7 +568,9 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
         ("net.ipv4.conf.default.rp_filter", s.rp_filter.to_string()),
     ];
 
-    let txqueuelen = s.txqueuelen;
+    let tso = if s.offload_tso { "on" } else { "off" };
+    let gso = if s.offload_gso { "on" } else { "off" };
+    let gro = if s.offload_gro { "on" } else { "off" };
 
     match format {
         OutputFormat::Cmd => {
@@ -545,9 +578,26 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                 println!("sysctl -w {}={}", key, value);
             }
             println!();
-            println!("# Set txqueuelen for all physical interfaces");
+            println!("# Interface tuning (ip link)");
             println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
-            println!("    ip link set dev $iface txqueuelen {}", txqueuelen);
+            println!("    ip link set dev \"$iface\" txqueuelen {}", s.txqueuelen);
+            println!("    ip link set dev \"$iface\" mtu {}", s.mtu);
+            println!("done");
+            println!();
+            println!("# Ethtool tuning (ring buffers, coalesce, offloads)");
+            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
+            println!(
+                "    ethtool -G \"$iface\" rx {} tx {} 2>/dev/null || true",
+                s.ring_rx, s.ring_tx
+            );
+            println!(
+                "    ethtool -C \"$iface\" rx-usecs {} tx-usecs {} 2>/dev/null || true",
+                s.coalesce_rx_usecs, s.coalesce_tx_usecs
+            );
+            println!(
+                "    ethtool -K \"$iface\" tso {} gso {} gro {} 2>/dev/null || true",
+                tso, gso, gro
+            );
             println!("done");
         }
         OutputFormat::Conf => {
@@ -561,8 +611,18 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                 println!("{} = {}", key, value);
             }
             println!();
-            println!("# NOTE: txqueuelen is not a sysctl, set via:");
-            println!("#   ip link set dev <iface> txqueuelen {}", txqueuelen);
+            println!("# NOTE: Interface settings (not sysctl) - apply via script or systemd unit:");
+            println!("#   ip link set dev <iface> txqueuelen {}", s.txqueuelen);
+            println!(
+                "#   ip link set dev <iface> mtu {} (requires network support)",
+                s.mtu
+            );
+            println!("#   ethtool -G <iface> rx {} tx {}", s.ring_rx, s.ring_tx);
+            println!(
+                "#   ethtool -C <iface> rx-usecs {} tx-usecs {}",
+                s.coalesce_rx_usecs, s.coalesce_tx_usecs
+            );
+            println!("#   ethtool -K <iface> tso {} gso {} gro {}", tso, gso, gro);
         }
         OutputFormat::Script => {
             println!("#!/bin/bash");
@@ -579,9 +639,30 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                 println!("sysctl -w {}={}", key, value);
             }
             println!();
-            println!("# Set txqueuelen for physical interfaces");
+            println!("# Interface tuning (ip link)");
             println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
-            println!("    ip link set dev \"$iface\" txqueuelen {}", txqueuelen);
+            println!("    ip link set dev \"$iface\" txqueuelen {}", s.txqueuelen);
+            println!(
+                "    # MTU {} requires network-wide jumbo frame support",
+                s.mtu
+            );
+            println!("    # ip link set dev \"$iface\" mtu {}", s.mtu);
+            println!("done");
+            println!();
+            println!("# Ethtool tuning (ring buffers, coalesce, offloads)");
+            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
+            println!(
+                "    ethtool -G \"$iface\" rx {} tx {} 2>/dev/null || true",
+                s.ring_rx, s.ring_tx
+            );
+            println!(
+                "    ethtool -C \"$iface\" rx-usecs {} tx-usecs {} 2>/dev/null || true",
+                s.coalesce_rx_usecs, s.coalesce_tx_usecs
+            );
+            println!(
+                "    ethtool -K \"$iface\" tso {} gso {} gro {} 2>/dev/null || true",
+                tso, gso, gro
+            );
             println!("done");
             println!();
             println!("echo 'Network tuning applied successfully'");
