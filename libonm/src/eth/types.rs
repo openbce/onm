@@ -41,6 +41,7 @@ pub struct EthInterface {
     pub name: String,
     pub mac_address: String,
     pub mtu: u32,
+    pub txqueuelen: u32,
     pub state: LinkState,
     pub speed: Option<u64>,
     pub driver: Option<String>,
@@ -53,6 +54,7 @@ impl Default for EthInterface {
             name: String::new(),
             mac_address: String::new(),
             mtu: 1500,
+            txqueuelen: 1000,
             state: LinkState::Unknown,
             speed: None,
             driver: None,
@@ -118,4 +120,68 @@ pub struct NetworkSysctl {
     pub tcp: TcpSettings,
     pub arp: ArpSettings,
     pub rp_filter: RpFilterSettings,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConntrackStats {
+    pub current: Option<u64>,
+    pub max: Option<u64>,
+    pub usage_percent: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SoftnetCpuStats {
+    pub cpu: u32,
+    pub processed: u64,
+    pub dropped: u64,
+    pub time_squeeze: u64,
+    pub cpu_collision: u64,
+    pub received_rps: u64,
+    pub flow_limit_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SoftnetStats {
+    pub cpus: Vec<SoftnetCpuStats>,
+    pub total_processed: u64,
+    pub total_dropped: u64,
+    pub total_time_squeeze: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SocketStats {
+    pub tcp_inuse: Option<u64>,
+    pub tcp_orphan: Option<u64>,
+    pub tcp_tw: Option<u64>,
+    pub tcp_alloc: Option<u64>,
+    pub tcp_mem: Option<u64>,
+    pub udp_inuse: Option<u64>,
+    pub udp_mem: Option<u64>,
+    pub raw_inuse: Option<u64>,
+    pub frag_inuse: Option<u64>,
+    pub frag_memory: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct InterfaceStats {
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub rx_errors: u64,
+    pub rx_dropped: u64,
+    pub rx_fifo: u64,
+    pub rx_frame: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_errors: u64,
+    pub tx_dropped: u64,
+    pub tx_fifo: u64,
+    pub tx_carrier: u64,
+    pub tx_collisions: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct NetworkStats {
+    pub conntrack: ConntrackStats,
+    pub softnet: SoftnetStats,
+    pub sockets: SocketStats,
 }

@@ -82,6 +82,8 @@ pub struct SuggestedValues {
     pub arp_announce: u64,
     // RP filter
     pub rp_filter: u64,
+    // Interface settings
+    pub txqueuelen: u64,
 }
 
 impl SuggestedValues {
@@ -129,6 +131,8 @@ impl SuggestedValues {
             arp_announce: 2,
 
             rp_filter: 0,
+
+            txqueuelen: 10000, // High queue for API server traffic bursts
         }
     }
 
@@ -169,6 +173,8 @@ impl SuggestedValues {
             arp_announce: 2,
 
             rp_filter: 0,
+
+            txqueuelen: 5000, // Moderate queue for pod traffic
         }
     }
 }
@@ -176,28 +182,37 @@ impl SuggestedValues {
 pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
     let iface = eth::get_interface(name)?;
     let profile = TuningProfile::from_str(profile_str);
+    let s = SuggestedValues::for_profile(profile);
 
     let mut iface_table = Table::new();
     iface_table.load_preset(UTF8_FULL);
-    iface_table.set_header(vec!["Interface Property", "Value"]);
-    iface_table.add_row(vec!["Name", &iface.name]);
-    iface_table.add_row(vec!["MAC Address", &iface.mac_address]);
-    iface_table.add_row(vec!["MTU", &iface.mtu.to_string()]);
-    iface_table.add_row(vec!["State", &iface.state.to_string()]);
+    iface_table.set_header(vec!["Interface Property", "Value", profile.header_suffix()]);
+    iface_table.add_row(vec!["Name", &iface.name, "-"]);
+    iface_table.add_row(vec!["MAC Address", &iface.mac_address, "-"]);
+    iface_table.add_row(vec!["MTU", &iface.mtu.to_string(), "-"]);
+    iface_table.add_row(vec![
+        "TX Queue Length",
+        &iface.txqueuelen.to_string(),
+        &s.txqueuelen.to_string(),
+    ]);
+    iface_table.add_row(vec!["State", &iface.state.to_string(), "-"]);
     iface_table.add_row(vec![
         "Speed",
         &iface
             .speed
             .map(|s| format!("{} Mbps", s))
             .unwrap_or("-".to_string()),
+        "-",
     ]);
     iface_table.add_row(vec![
         "Driver",
         &iface.driver.clone().unwrap_or("-".to_string()),
+        "-",
     ]);
     iface_table.add_row(vec![
         "PCI Slot",
         &iface.pci_slot.clone().unwrap_or("-".to_string()),
+        "-",
     ]);
 
     println!("{iface_table}");
@@ -522,11 +537,18 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
         ("net.ipv4.conf.default.rp_filter", s.rp_filter.to_string()),
     ];
 
+    let txqueuelen = s.txqueuelen;
+
     match format {
         OutputFormat::Cmd => {
             for (key, value) in &settings {
                 println!("sysctl -w {}={}", key, value);
             }
+            println!();
+            println!("# Set txqueuelen for all physical interfaces");
+            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
+            println!("    ip link set dev $iface txqueuelen {}", txqueuelen);
+            println!("done");
         }
         OutputFormat::Conf => {
             println!(
@@ -538,22 +560,31 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             for (key, value) in &settings {
                 println!("{} = {}", key, value);
             }
+            println!();
+            println!("# NOTE: txqueuelen is not a sysctl, set via:");
+            println!("#   ip link set dev <iface> txqueuelen {}", txqueuelen);
         }
         OutputFormat::Script => {
             println!("#!/bin/bash");
             println!(
-                "# Sysctl tuning for 10k-node cluster ({} profile)",
+                "# Network tuning for 10k-node cluster ({} profile)",
                 profile.name()
             );
             println!("# Run with: sudo bash <script>");
             println!();
             println!("set -e");
             println!();
+            println!("# Sysctl settings");
             for (key, value) in &settings {
                 println!("sysctl -w {}={}", key, value);
             }
             println!();
-            println!("echo 'Sysctl settings applied successfully'");
+            println!("# Set txqueuelen for physical interfaces");
+            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
+            println!("    ip link set dev \"$iface\" txqueuelen {}", txqueuelen);
+            println!("done");
+            println!();
+            println!("echo 'Network tuning applied successfully'");
         }
     }
 }

@@ -4,12 +4,14 @@ use std::fs;
 use std::path::Path;
 
 pub use types::{
-    ArpSettings, ConntrackSettings, EthError, EthInterface, LinkState, NetworkSysctl,
-    RpFilterSettings, SocketBufferSettings, TcpSettings,
+    ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, InterfaceStats,
+    LinkState, NetworkStats, NetworkSysctl, RpFilterSettings, SocketBufferSettings, SocketStats,
+    SoftnetCpuStats, SoftnetStats, TcpSettings,
 };
 
 const SYS_CLASS_NET: &str = "/sys/class/net";
 const PROC_SYS: &str = "/proc/sys";
+const PROC_NET: &str = "/proc/net";
 
 pub fn list_interfaces() -> Result<Vec<EthInterface>, EthError> {
     let mut interfaces = Vec::new();
@@ -68,6 +70,10 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1500);
 
+    let txqueuelen = read_sysfs_file(path, "tx_queue_len")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1000);
+
     let state = match read_sysfs_file(path, "operstate").as_deref() {
         Some("up") => LinkState::Up,
         Some("down") => LinkState::Down,
@@ -94,6 +100,7 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         name: name.to_string(),
         mac_address,
         mtu,
+        txqueuelen,
         state,
         speed,
         driver,
@@ -167,4 +174,170 @@ pub fn get_network_sysctl() -> NetworkSysctl {
             default: read_sysctl_u64("net.ipv4.conf.default.rp_filter"),
         },
     }
+}
+
+pub fn get_network_stats() -> NetworkStats {
+    NetworkStats {
+        conntrack: get_conntrack_stats(),
+        softnet: get_softnet_stats(),
+        sockets: get_socket_stats(),
+    }
+}
+
+fn get_conntrack_stats() -> ConntrackStats {
+    let current = read_proc_file("net/nf_conntrack_count");
+    let max = read_sysctl_u64("net.netfilter.nf_conntrack_max");
+
+    let usage_percent = match (current, max) {
+        (Some(c), Some(m)) if m > 0 => Some((c as f64 / m as f64) * 100.0),
+        _ => None,
+    };
+
+    ConntrackStats {
+        current,
+        max,
+        usage_percent,
+    }
+}
+
+fn get_softnet_stats() -> SoftnetStats {
+    let path = Path::new(PROC_NET).join("softnet_stat");
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return SoftnetStats::default(),
+    };
+
+    let mut cpus = Vec::new();
+    let mut total_processed = 0u64;
+    let mut total_dropped = 0u64;
+    let mut total_time_squeeze = 0u64;
+
+    for (cpu_id, line) in content.lines().enumerate() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 3 {
+            let processed = u64::from_str_radix(fields[0], 16).unwrap_or(0);
+            let dropped = u64::from_str_radix(fields[1], 16).unwrap_or(0);
+            let time_squeeze = u64::from_str_radix(fields[2], 16).unwrap_or(0);
+            let cpu_collision = fields
+                .get(3)
+                .and_then(|s| u64::from_str_radix(s, 16).ok())
+                .unwrap_or(0);
+            let received_rps = fields
+                .get(4)
+                .and_then(|s| u64::from_str_radix(s, 16).ok())
+                .unwrap_or(0);
+            let flow_limit_count = fields
+                .get(5)
+                .and_then(|s| u64::from_str_radix(s, 16).ok())
+                .unwrap_or(0);
+
+            total_processed += processed;
+            total_dropped += dropped;
+            total_time_squeeze += time_squeeze;
+
+            cpus.push(SoftnetCpuStats {
+                cpu: cpu_id as u32,
+                processed,
+                dropped,
+                time_squeeze,
+                cpu_collision,
+                received_rps,
+                flow_limit_count,
+            });
+        }
+    }
+
+    SoftnetStats {
+        cpus,
+        total_processed,
+        total_dropped,
+        total_time_squeeze,
+    }
+}
+
+fn get_socket_stats() -> SocketStats {
+    let path = Path::new(PROC_NET).join("sockstat");
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return SocketStats::default(),
+    };
+
+    let mut stats = SocketStats::default();
+
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        match parts[0] {
+            "TCP:" => {
+                stats.tcp_inuse = find_stat_value(&parts, "inuse");
+                stats.tcp_orphan = find_stat_value(&parts, "orphan");
+                stats.tcp_tw = find_stat_value(&parts, "tw");
+                stats.tcp_alloc = find_stat_value(&parts, "alloc");
+                stats.tcp_mem = find_stat_value(&parts, "mem");
+            }
+            "UDP:" => {
+                stats.udp_inuse = find_stat_value(&parts, "inuse");
+                stats.udp_mem = find_stat_value(&parts, "mem");
+            }
+            "RAW:" => {
+                stats.raw_inuse = find_stat_value(&parts, "inuse");
+            }
+            "FRAG:" => {
+                stats.frag_inuse = find_stat_value(&parts, "inuse");
+                stats.frag_memory = find_stat_value(&parts, "memory");
+            }
+            _ => {}
+        }
+    }
+
+    stats
+}
+
+fn find_stat_value(parts: &[&str], key: &str) -> Option<u64> {
+    for i in 0..parts.len() - 1 {
+        if parts[i] == key {
+            return parts[i + 1].parse().ok();
+        }
+    }
+    None
+}
+
+fn read_proc_file(path: &str) -> Option<u64> {
+    let full_path = Path::new("/proc").join(path);
+    fs::read_to_string(&full_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+pub fn get_interface_stats(name: &str) -> Result<InterfaceStats, EthError> {
+    let path = Path::new(SYS_CLASS_NET).join(name).join("statistics");
+    if !path.exists() {
+        return Err(EthError::NotFound(name.to_string()));
+    }
+
+    Ok(InterfaceStats {
+        rx_bytes: read_stat_file(&path, "rx_bytes"),
+        rx_packets: read_stat_file(&path, "rx_packets"),
+        rx_errors: read_stat_file(&path, "rx_errors"),
+        rx_dropped: read_stat_file(&path, "rx_dropped"),
+        rx_fifo: read_stat_file(&path, "rx_fifo_errors"),
+        rx_frame: read_stat_file(&path, "rx_frame_errors"),
+        tx_bytes: read_stat_file(&path, "tx_bytes"),
+        tx_packets: read_stat_file(&path, "tx_packets"),
+        tx_errors: read_stat_file(&path, "tx_errors"),
+        tx_dropped: read_stat_file(&path, "tx_dropped"),
+        tx_fifo: read_stat_file(&path, "tx_fifo_errors"),
+        tx_carrier: read_stat_file(&path, "tx_carrier_errors"),
+        tx_collisions: read_stat_file(&path, "collisions"),
+    })
+}
+
+fn read_stat_file(base: &Path, file: &str) -> u64 {
+    fs::read_to_string(base.join(file))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
 }
