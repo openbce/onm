@@ -42,17 +42,13 @@ pub struct BMCVersion {
 }
 
 pub struct XPU {
-    // The redfish client of XPU
     redfish: Box<dyn Redfish>,
 
-    // The basic info of XPU
     pub vendor: String,
     pub serial_number: String,
     pub firmware_version: String,
-    pub bmc: BMC,
     pub bmc_version: String,
 
-    // The status of XPU
     pub status: XPUStatus,
 }
 
@@ -69,6 +65,10 @@ impl ToString for XPUStatus {
 impl XPU {
     pub async fn new(bmc: &BMC) -> Result<Self, XPUError> {
         let redfish = redfish::build(bmc)?;
+
+        // Run discover flow to handle default password scenarios
+        redfish.discover().await?;
+
         let bmc_ver = redfish.bmc_version().await?;
 
         let xpu = XPU {
@@ -77,7 +77,6 @@ impl XPU {
             serial_number: "-".to_string(),
             firmware_version: "-".to_string(),
             bmc_version: bmc_ver.version,
-            bmc: bmc.clone(),
             status: XPUStatus::Ready,
         };
 

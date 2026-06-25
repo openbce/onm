@@ -10,7 +10,6 @@ pub struct Bluefield {
 
 const DEFAULT_PASSWORD: &str = "0penBmc";
 const DEFAULT_USER: &str = "root";
-const VENDOR: &str = "bluefield";
 
 #[async_trait]
 impl Redfish for Bluefield {
@@ -41,14 +40,12 @@ impl Redfish for Bluefield {
             return Ok(());
         }
 
-        // Try to change the default password.
-        let default_bmc = Bluefield::default_bmc(&self.bmc.username, &self.bmc.address);
+        let default_bmc = Bluefield::default_bmc(&self.bmc.address);
         let default_redfish = Box::new(Bluefield::new(&default_bmc)?);
         default_redfish
             .change_password(self.bmc.password.clone())
             .await?;
 
-        // Retry BMC version by the password.
         let _ = self.bmc_version().await?;
 
         Ok(())
@@ -69,7 +66,7 @@ impl Bluefield {
         })
     }
 
-    fn default_bmc(name: &str, addr: &str) -> BMC {
+    fn default_bmc(addr: &str) -> BMC {
         BMC {
             address: addr.to_string(),
             password: DEFAULT_PASSWORD.to_string(),

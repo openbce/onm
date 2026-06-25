@@ -1,10 +1,16 @@
+use std::time::Duration;
+
 use bytes::Bytes;
 use http::Method;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use reqwest::StatusCode;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use thiserror::Error;
 use url::Url;
 
 use reqwest::{header::HeaderValue, header::ACCEPT, header::CONTENT_TYPE};
+
+const REST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct RestClient {
     address: String,
@@ -17,9 +23,6 @@ pub struct RestConfig {
     pub username: String,
     pub password: String,
 }
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct EmptyResponse {}
 
 #[derive(Error, Debug)]
 pub enum RestError {
@@ -159,17 +162,17 @@ impl RestClient {
 
         let body = Bytes::from(data.clone().unwrap_or(String::new()));
         tracing::debug!(
-            "Method: {method}, URL: {url}, Auth: <{0}/{1}>, Body: <{2}>",
+            "Method: {method}, URL: {url}, Auth: <{}/***>, Body: <{}>",
             self.user,
-            self.password,
             data.unwrap_or(String::new())
         );
 
         let client = reqwest::ClientBuilder::new()
             .danger_accept_invalid_certs(true)
+            .timeout(REST_TIMEOUT)
             .build()?;
         let req = client
-            .request(method, url)
+            .request(method, url.clone())
             .header(ACCEPT, HeaderValue::from_static("application/json"))
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .body(body)
@@ -177,6 +180,14 @@ impl RestClient {
             .build()?;
         let resp = client.execute(req).await?;
 
-        Ok(resp.text().await?)
+        let status = resp.status();
+        let body = resp.text().await?;
+
+        match status {
+            StatusCode::OK | StatusCode::CREATED | StatusCode::ACCEPTED | StatusCode::NO_CONTENT => Ok(body),
+            StatusCode::NOT_FOUND => Err(RestError::NotFound(url)),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(RestError::AuthFailure(body)),
+            _ => Err(RestError::Http(format!("HTTP {}: {}", status, body))),
+        }
     }
 }
