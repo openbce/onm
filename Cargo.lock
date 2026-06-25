@@ -2843,9 +2843,9 @@ name = "xpuctl"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "base64",
  "bytes",
  "clap",
+ "futures",
  "http",
  "libonm",
  "reqwest",

@@ -24,6 +24,7 @@ reqwest = { version = "0.13", features = ["json"] }
 http = "1.4"
 bytes = "1"
 url = { version = "2", features = ["serde"] }
+base64 = "0.22"
 ethtool = "0.2"
 rtnetlink = "0.21"
 netlink-packet-route = "0.30"

@@ -271,6 +271,7 @@ fn print_interfaces_table(interfaces: &[eth::EthInterface], s: &SuggestedValues)
         Cell::new("Duplex"),
         Cell::new("NUMA"),
         Cell::new("Driver"),
+        Cell::new("Type"),
     ]);
 
     for iface in interfaces {
@@ -297,6 +298,7 @@ fn print_interfaces_table(interfaces: &[eth::EthInterface], s: &SuggestedValues)
             duplex_str,
             numa_str,
             driver_str,
+            iface.interface_type.to_string(),
         ]);
     }
 

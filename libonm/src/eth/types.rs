@@ -37,6 +37,21 @@ impl ToString for LinkState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum InterfaceType {
+    Physical,
+    Virtual,
+}
+
+impl ToString for InterfaceType {
+    fn to_string(&self) -> String {
+        match self {
+            InterfaceType::Physical => "physical".to_string(),
+            InterfaceType::Virtual => "virtual".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EthInterface {
     pub name: String,
     pub mac_address: String,
@@ -49,6 +64,7 @@ pub struct EthInterface {
     pub numa_node: Option<i32>,
     pub driver: Option<String>,
     pub pci_slot: Option<String>,
+    pub interface_type: InterfaceType,
 }
 
 impl Default for EthInterface {
@@ -65,6 +81,7 @@ impl Default for EthInterface {
             numa_node: None,
             driver: None,
             pci_slot: None,
+            interface_type: InterfaceType::Virtual,
         }
     }
 }

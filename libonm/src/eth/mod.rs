@@ -7,8 +7,8 @@ use std::time::Duration;
 
 pub use types::{
     ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
-    EthtoolOffload, EthtoolRing, EthtoolSettings, InterfaceStats, LinkSettings, LinkState,
-    NetworkStats, NetworkSysctl, RpFilterSettings, SocketBufferSettings, SocketStats,
+    EthtoolOffload, EthtoolRing, EthtoolSettings, InterfaceStats, InterfaceType, LinkSettings,
+    LinkState, NetworkStats, NetworkSysctl, RpFilterSettings, SocketBufferSettings, SocketStats,
     SoftnetCpuStats, SoftnetStats, TcpSettings, UdpSettings,
 };
 
@@ -63,6 +63,24 @@ fn is_ethernet_device(path: &Path) -> bool {
     false
 }
 
+fn get_interface_type(path: &Path) -> InterfaceType {
+    // Physical interfaces have a device symlink pointing to a PCI device
+    // Virtual interfaces (veth, bridge, etc.) don't have a real PCI device
+    let device_path = path.join("device");
+    if !device_path.exists() {
+        return InterfaceType::Virtual;
+    }
+
+    // Check if device path contains "virtual" (e.g., /sys/devices/virtual/...)
+    if let Ok(resolved) = device_path.canonicalize() {
+        if resolved.to_string_lossy().contains("/virtual/") {
+            return InterfaceType::Virtual;
+        }
+    }
+
+    InterfaceType::Physical
+}
+
 fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
     let mac_address = read_sysfs_file(path, "address").unwrap_or_default();
     let mtu = read_sysfs_file(path, "mtu")
@@ -104,6 +122,8 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
+    let interface_type = get_interface_type(path);
+
     Ok(EthInterface {
         name: name.to_string(),
         mac_address,
@@ -116,6 +136,7 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         numa_node,
         driver,
         pci_slot,
+        interface_type,
     })
 }
 
