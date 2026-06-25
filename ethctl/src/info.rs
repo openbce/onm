@@ -227,9 +227,16 @@ impl SuggestedValues {
     }
 }
 
-pub fn run(profile_str: &str) -> Result<(), EthError> {
-    let interfaces = eth::list_interfaces()?;
+pub fn run(profile_str: &str, output: Option<&str>) -> Result<(), EthError> {
     let profile = TuningProfile::from_str(profile_str);
+
+    if let Some(fmt) = output {
+        let format = OutputFormat::from_str(fmt);
+        generate_sysctl_output(profile, format);
+        return Ok(());
+    }
+
+    let interfaces = eth::list_interfaces()?;
     let s = SuggestedValues::for_profile(profile);
     let sysctl = eth::get_network_sysctl();
 

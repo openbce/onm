@@ -25,6 +25,9 @@ enum Commands {
         /// Tuning profile for suggested values: control-plane, worker (default: worker)
         #[arg(short, long, default_value = "worker")]
         profile: String,
+        /// Output suggested values as commands: cmd, conf, script
+        #[arg(short, long)]
+        output: Option<String>,
     },
     /// Show ip link and ethtool settings with suggested values
     Link {
@@ -54,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::List => list::run()?,
-        Commands::Info { profile } => info::run(&profile)?,
+        Commands::Info { profile, output } => info::run(&profile, output.as_deref())?,
         Commands::Link {
             name,
             profile,
