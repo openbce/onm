@@ -227,7 +227,7 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
     let s = SuggestedValues::for_profile(profile);
 
     let mut iface_table = Table::new();
-    iface_table.load_preset(UTF8_FULL);
+    iface_table.load_preset(NOTHING);
     iface_table.set_header(vec!["Interface Property", "Value", profile.header_suffix()]);
     iface_table.add_row(vec!["Name", &iface.name, "-"]);
     iface_table.add_row(vec!["MAC Address", &iface.mac_address, "-"]);
