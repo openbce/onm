@@ -24,9 +24,19 @@ enum Commands {
     Info {
         #[arg(short, long)]
         name: String,
+        /// Tuning profile for suggested values: control-plane, worker (default: worker)
+        #[arg(short, long, default_value = "worker")]
+        profile: String,
     },
     /// Show network sysctl tuning parameters
-    Sysctl,
+    Sysctl {
+        /// Tuning profile for suggested values: control-plane, worker (default: worker)
+        #[arg(short, long, default_value = "worker")]
+        profile: String,
+        /// Generate commands to apply suggested values: cmd, conf, script (default: cmd)
+        #[arg(short, long, default_missing_value = "cmd", num_args = 0..=1)]
+        generate: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -44,8 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::List => list::run()?,
-        Commands::Info { name } => info::run(&name)?,
-        Commands::Sysctl => sysctl::run(),
+        Commands::Info { name, profile } => info::run(&name, &profile)?,
+        Commands::Sysctl { profile, generate } => sysctl::run(&profile, generate.as_deref()),
     }
 
     Ok(())
