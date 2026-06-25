@@ -49,7 +49,7 @@ enum SubCommand {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut env_filter = EnvFilter::builder()
+    let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy()
         .add_directive("tower=warn".parse()?)

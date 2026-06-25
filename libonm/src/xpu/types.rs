@@ -42,8 +42,10 @@ pub struct BMCVersion {
 }
 
 pub struct XPU {
+    #[allow(dead_code)]
     redfish: Box<dyn Redfish>,
 
+    pub bmc: BMC,
     pub vendor: String,
     pub serial_number: String,
     pub firmware_version: String,
@@ -73,6 +75,7 @@ impl XPU {
 
         let xpu = XPU {
             redfish,
+            bmc: bmc.clone(),
             vendor: "-".to_string(),
             serial_number: "-".to_string(),
             firmware_version: "-".to_string(),
