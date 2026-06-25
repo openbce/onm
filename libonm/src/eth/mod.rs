@@ -354,47 +354,44 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
 
     let mut settings = EthtoolSettings::default();
 
-    if let Ok(mut rings) = handle.ring().get(Some(name)).execute().await {
-        while let Some(Ok(msg)) = rings.next().await {
-            for attr in msg.nlas {
-                if let EthtoolAttr::Ring(ring_attr) = attr {
-                    match ring_attr {
-                        EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
-                        EthtoolRingAttr::Rx(v) => settings.ring.rx = Some(v),
-                        EthtoolRingAttr::TxMax(v) => settings.ring.tx_max = Some(v),
-                        EthtoolRingAttr::Tx(v) => settings.ring.tx = Some(v),
-                        _ => {}
-                    }
+    let mut rings = handle.ring().get(Some(name)).execute().await;
+    while let Some(Ok(msg)) = rings.next().await {
+        for attr in msg.nlas {
+            if let EthtoolAttr::Ring(ring_attr) = attr {
+                match ring_attr {
+                    EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
+                    EthtoolRingAttr::Rx(v) => settings.ring.rx = Some(v),
+                    EthtoolRingAttr::TxMax(v) => settings.ring.tx_max = Some(v),
+                    EthtoolRingAttr::Tx(v) => settings.ring.tx = Some(v),
+                    _ => {}
                 }
             }
         }
     }
 
-    if let Ok(mut coalesces) = handle.coalesce().get(Some(name)).execute().await {
-        while let Some(Ok(msg)) = coalesces.next().await {
-            for attr in msg.nlas {
-                if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
-                    match coalesce_attr {
-                        EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
-                        EthtoolCoalesceAttr::TxUsecs(v) => settings.coalesce.tx_usecs = Some(v),
-                        _ => {}
-                    }
+    let mut coalesces = handle.coalesce().get(Some(name)).execute().await;
+    while let Some(Ok(msg)) = coalesces.next().await {
+        for attr in msg.nlas {
+            if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
+                match coalesce_attr {
+                    EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
+                    EthtoolCoalesceAttr::TxUsecs(v) => settings.coalesce.tx_usecs = Some(v),
+                    _ => {}
                 }
             }
         }
     }
 
-    if let Ok(mut features) = handle.feature().get(Some(name)).execute().await {
-        while let Some(Ok(msg)) = features.next().await {
-            for attr in msg.nlas {
-                if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
-                    for bit in bits {
-                        match bit.name.as_str() {
-                            "tx-tcp-segmentation" => settings.offload.tso = Some(bit.value),
-                            "tx-generic-segmentation" => settings.offload.gso = Some(bit.value),
-                            "rx-gro" => settings.offload.gro = Some(bit.value),
-                            _ => {}
-                        }
+    let mut features = handle.feature().get(Some(name)).execute().await;
+    while let Some(Ok(msg)) = features.next().await {
+        for attr in msg.nlas {
+            if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
+                for bit in bits {
+                    match bit.name.as_str() {
+                        "tx-tcp-segmentation" => settings.offload.tso = Some(bit.value),
+                        "tx-generic-segmentation" => settings.offload.gso = Some(bit.value),
+                        "rx-gro" => settings.offload.gro = Some(bit.value),
+                        _ => {}
                     }
                 }
             }

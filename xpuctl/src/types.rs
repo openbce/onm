@@ -23,9 +23,15 @@ const DEFAULT_PASSWORD: &str = "0penBmc";
 impl From<&BMC> for libonm::xpu::BMC {
     fn from(bmc: &BMC) -> Self {
         libonm::xpu::BMC {
-            username: bmc.username.clone().unwrap_or_else(|| DEFAULT_USER.to_string()),
+            username: bmc
+                .username
+                .clone()
+                .unwrap_or_else(|| DEFAULT_USER.to_string()),
             address: bmc.address.clone(),
-            password: bmc.password.clone().unwrap_or_else(|| DEFAULT_PASSWORD.to_string()),
+            password: bmc
+                .password
+                .clone()
+                .unwrap_or_else(|| DEFAULT_PASSWORD.to_string()),
         }
     }
 }

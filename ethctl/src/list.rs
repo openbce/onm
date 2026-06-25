@@ -22,7 +22,10 @@ pub fn run() -> Result<(), EthError> {
             iface.mac_address,
             iface.mtu.to_string(),
             iface.state.to_string(),
-            iface.speed.map(|s| s.to_string()).unwrap_or("-".to_string()),
+            iface
+                .speed
+                .map(|s| s.to_string())
+                .unwrap_or("-".to_string()),
             iface.driver.unwrap_or("-".to_string()),
             iface.pci_slot.unwrap_or("-".to_string()),
         ]);

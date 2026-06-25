@@ -184,7 +184,10 @@ impl RestClient {
         let body = resp.text().await?;
 
         match status {
-            StatusCode::OK | StatusCode::CREATED | StatusCode::ACCEPTED | StatusCode::NO_CONTENT => Ok(body),
+            StatusCode::OK
+            | StatusCode::CREATED
+            | StatusCode::ACCEPTED
+            | StatusCode::NO_CONTENT => Ok(body),
             StatusCode::NOT_FOUND => Err(RestError::NotFound(url)),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(RestError::AuthFailure(body)),
             _ => Err(RestError::Http(format!("HTTP {}: {}", status, body))),

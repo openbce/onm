@@ -14,12 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-use std::ffi::CStr;
+use std::ffi::{c_char, CStr};
 use std::io;
 
 use libudev::Device;
 
-pub unsafe fn cstr_to_string(s: *const i8) -> String {
+pub unsafe fn cstr_to_string(s: *const c_char) -> String {
     CStr::from_ptr(s)
         .to_str()
         .expect("not an utf8 string")
