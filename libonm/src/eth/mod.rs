@@ -355,7 +355,7 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
 
     let mut rings = handle.ring().get(Some(name)).execute().await;
     while let Ok(Some(msg)) = rings.try_next().await {
-        for attr in msg.nlas {
+        for attr in msg.payload.nlas {
             if let EthtoolAttr::Ring(ring_attr) = attr {
                 match ring_attr {
                     EthtoolRingAttr::RxMax(v) => settings.ring.rx_max = Some(v),
@@ -370,7 +370,7 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
 
     let mut coalesces = handle.coalesce().get(Some(name)).execute().await;
     while let Ok(Some(msg)) = coalesces.try_next().await {
-        for attr in msg.nlas {
+        for attr in msg.payload.nlas {
             if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
                 match coalesce_attr {
                     EthtoolCoalesceAttr::RxUsecs(v) => settings.coalesce.rx_usecs = Some(v),
@@ -383,7 +383,7 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
 
     let mut features = handle.feature().get(Some(name)).execute().await;
     while let Ok(Some(msg)) = features.try_next().await {
-        for attr in msg.nlas {
+        for attr in msg.payload.nlas {
             if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
                 for bit in bits {
                     match bit.name.as_str() {
