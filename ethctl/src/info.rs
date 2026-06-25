@@ -226,9 +226,11 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
     let profile = TuningProfile::from_str(profile_str);
     let s = SuggestedValues::for_profile(profile);
 
+    println!("Profile: {}", profile.name());
+    println!();
+
     let mut iface_table = Table::new();
     iface_table.load_preset(NOTHING);
-    iface_table.set_header(vec!["Interface Property", "Value", profile.header_suffix()]);
     iface_table.add_row(vec!["Name", &iface.name, "-"]);
     iface_table.add_row(vec!["MAC Address", &iface.mac_address, "-"]);
     iface_table.add_row(vec![
@@ -274,11 +276,12 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
 
     let sysctl = eth::get_network_sysctl();
     let s = SuggestedValues::for_profile(profile);
-    let header = profile.header_suffix();
+
+    println!("Profile: {}", profile.name());
+    println!();
 
     let mut table = Table::new();
     table.load_preset(NOTHING);
-    table.set_header(vec!["Parameter", "Value", header]);
 
     add_section(&mut table, "Connection Tracking");
     add_row(
@@ -477,14 +480,15 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) {
     use libonm::eth;
 
     let s = SuggestedValues::for_profile(profile);
-    let header = profile.header_suffix();
 
     let link = eth::get_link_settings(name).await.ok();
     let ethtool = eth::get_ethtool_settings(name).await.ok();
 
+    println!("Profile: {}", profile.name());
+    println!();
+
     let mut table = Table::new();
     table.load_preset(NOTHING);
-    table.set_header(vec!["Parameter", "Value", header]);
 
     add_section(&mut table, "IP Link Settings");
     if let Some(ref l) = link {
