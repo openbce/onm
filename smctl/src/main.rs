@@ -121,7 +121,7 @@ async fn main() -> Result<(), UFMError> {
 
     let opt: Options = Options::parse();
 
-    let conf = load_conf(&opt);
+    let conf = load_conf(&opt)?;
     match &opt.command {
         Some(Commands::Delete { pkey }) => delete::run(conf, pkey).await?,
         Some(Commands::Version) => version::run(conf).await?,
@@ -170,28 +170,26 @@ async fn main() -> Result<(), UFMError> {
     Ok(())
 }
 
-fn load_conf(opt: &Options) -> UFMConfig {
-    let ufm_address = match opt.ufm_address.clone() {
-        Some(s) => s,
-        None => panic!("UFM_ADDRESS environment or ufm_address parameter not found"),
+fn load_conf(opt: &Options) -> Result<UFMConfig, UFMError> {
+    let ufm_address = opt
+        .ufm_address
+        .clone()
+        .ok_or_else(|| UFMError::InvalidConfig("UFM_ADDRESS environment or --ufm-address required".to_string()))?;
+
+    let cert = match (&opt.ufm_ca_crt, &opt.ufm_tls_key, &opt.ufm_tls_crt) {
+        (Some(ca_crt), Some(tls_key), Some(tls_crt)) => Some(UFMCert {
+            ca_crt: ca_crt.clone(),
+            tls_key: tls_key.clone(),
+            tls_crt: tls_crt.clone(),
+        }),
+        _ => None,
     };
 
-    let cert = if opt.ufm_ca_crt.is_some() && opt.ufm_tls_key.is_some() && opt.ufm_tls_crt.is_some()
-    {
-        Some(UFMCert {
-            ca_crt: opt.ufm_ca_crt.clone().unwrap(),
-            tls_key: opt.ufm_tls_key.clone().unwrap(),
-            tls_crt: opt.ufm_tls_crt.clone().unwrap(),
-        })
-    } else {
-        None
-    };
-
-    UFMConfig {
+    Ok(UFMConfig {
         address: ufm_address,
         username: opt.ufm_username.clone(),
         password: opt.ufm_password.clone(),
         token: opt.ufm_token.clone(),
         cert,
-    }
+    })
 }
