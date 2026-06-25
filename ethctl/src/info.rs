@@ -230,7 +230,7 @@ pub fn run(name: &str, profile_str: &str) -> Result<(), EthError> {
     let mut table = Table::new();
     table.load_preset(NOTHING);
 
-    add_section(&mut table, "Overview");
+    add_first_section(&mut table, "Overview");
     table.add_row(vec!["  Profile", profile.name(), "-"]);
     table.add_row(vec!["  Name", &iface.name, "-"]);
     table.add_row(vec!["  MAC Address", &iface.mac_address, "-"]);
@@ -280,7 +280,7 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
     let mut table = Table::new();
     table.load_preset(NOTHING);
 
-    add_section(&mut table, "Overview");
+    add_first_section(&mut table, "Overview");
     table.add_row(vec!["  Profile", profile.name(), "-"]);
 
     add_sysctl_rows(&mut table, &sysctl, &s);
@@ -491,7 +491,7 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) {
     let mut table = Table::new();
     table.load_preset(NOTHING);
 
-    add_section(&mut table, "Overview");
+    add_first_section(&mut table, "Overview");
     table.add_row(vec!["  Profile", profile.name(), "-"]);
 
     add_section(&mut table, "IP Link Settings");
@@ -572,8 +572,17 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) {
 }
 
 fn add_section(table: &mut Table, name: &str) {
+    table.add_row(vec![Cell::new(""), Cell::new(""), Cell::new("")]);
     table.add_row(vec![
-        Cell::new(name).fg(Color::Cyan),
+        Cell::new(format!("{}:", name)).fg(Color::Cyan),
+        Cell::new(""),
+        Cell::new(""),
+    ]);
+}
+
+fn add_first_section(table: &mut Table, name: &str) {
+    table.add_row(vec![
+        Cell::new(format!("{}:", name)).fg(Color::Cyan),
         Cell::new(""),
         Cell::new(""),
     ]);
