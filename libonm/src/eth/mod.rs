@@ -147,6 +147,7 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         driver,
         pci_slot,
         interface_type,
+        addresses: Vec::new(),
     })
 }
 

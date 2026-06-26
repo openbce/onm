@@ -2,23 +2,24 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 RELEASE_DIR := release
 RELEASE_NAME := onm-$(VERSION)-linux-amd64
 BINARIES := ethctl smctl hcactl xpuctl
-DOCKER_BUILD_IMAGE := onm-builder
+BUILD_IMAGE := onm-builder
+CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo docker)
 
-.PHONY: all build release clean install docker-builder docker-build docker-release
+.PHONY: all build release clean install container-builder container-build container-release
 
 all: build
 
 build:
 	cargo build --release
 
-docker-builder:
-	docker build --target builder -t $(DOCKER_BUILD_IMAGE) .
+container-builder:
+	$(CONTAINER_ENGINE) build --target builder -t $(BUILD_IMAGE) .
 
-docker-build: docker-builder
-	docker run --rm \
+container-build: container-builder
+	$(CONTAINER_ENGINE) run --rm \
 		-v $(CURDIR):/workspace \
 		-w /workspace \
-		$(DOCKER_BUILD_IMAGE) \
+		$(BUILD_IMAGE) \
 		cargo build --release
 
 release: build
@@ -31,7 +32,7 @@ release: build
 	@rm -rf $(RELEASE_DIR)/$(RELEASE_NAME)
 	@echo "Release package: $(RELEASE_DIR)/$(RELEASE_NAME).tar.gz"
 
-docker-release: docker-build
+container-release: container-build
 	@mkdir -p $(RELEASE_DIR)/$(RELEASE_NAME)
 	@for bin in $(BINARIES); do \
 		cp target/release/$$bin $(RELEASE_DIR)/$(RELEASE_NAME)/; \

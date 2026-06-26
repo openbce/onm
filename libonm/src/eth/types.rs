@@ -51,7 +51,7 @@ impl ToString for InterfaceType {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EthInterface {
     pub name: String,
     pub mac_address: String,
