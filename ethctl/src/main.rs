@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match args.command {
-        Commands::List => list::run()?,
+        Commands::List => list::run().await?,
         Commands::Info { profile, output } => info::run(&profile, output.as_deref())?,
         Commands::Link {
             name,

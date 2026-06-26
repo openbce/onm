@@ -1,7 +1,7 @@
 use comfy_table::{presets::UTF8_FULL, Table};
 use libonm::eth::{self, EthError};
 
-pub fn run() -> Result<(), EthError> {
+pub async fn run() -> Result<(), EthError> {
     let interfaces = eth::list_interfaces()?;
 
     let mut table = Table::new();
@@ -9,17 +9,27 @@ pub fn run() -> Result<(), EthError> {
     table.set_header(vec![
         "Name",
         "MAC Address",
+        "Addresses",
         "MTU",
         "State",
         "Speed(Mbps)",
         "Driver",
-        "PCI Slot",
     ]);
 
     for iface in interfaces {
+        let addresses = eth::get_interface_addresses(&iface.name)
+            .await
+            .unwrap_or_default();
+        let addr_str = if addresses.is_empty() {
+            "-".to_string()
+        } else {
+            addresses.join(", ")
+        };
+
         table.add_row(vec![
             iface.name,
             iface.mac_address,
+            addr_str,
             iface.mtu.to_string(),
             iface.state.to_string(),
             iface
@@ -27,7 +37,6 @@ pub fn run() -> Result<(), EthError> {
                 .map(|s| s.to_string())
                 .unwrap_or("-".to_string()),
             iface.driver.unwrap_or("-".to_string()),
-            iface.pci_slot.unwrap_or("-".to_string()),
         ]);
     }
 

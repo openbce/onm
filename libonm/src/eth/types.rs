@@ -51,7 +51,7 @@ impl ToString for InterfaceType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EthInterface {
     pub name: String,
     pub mac_address: String,
@@ -65,6 +65,7 @@ pub struct EthInterface {
     pub driver: Option<String>,
     pub pci_slot: Option<String>,
     pub interface_type: InterfaceType,
+    pub addresses: Vec<String>,
 }
 
 impl Default for EthInterface {
@@ -82,6 +83,7 @@ impl Default for EthInterface {
             driver: None,
             pci_slot: None,
             interface_type: InterfaceType::Virtual,
+            addresses: Vec::new(),
         }
     }
 }

@@ -504,6 +504,57 @@ pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
     }
 }
 
+pub async fn get_interface_addresses(name: &str) -> Result<Vec<String>, EthError> {
+    use netlink_packet_route::address::AddressAttribute;
+
+    let (conn, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| EthError::Internal(format!("Failed to create rtnetlink connection: {}", e)))?;
+    let conn_handle = tokio::spawn(conn);
+
+    let ifindex = get_interface_index(name);
+
+    let result = tokio::time::timeout(NETLINK_TIMEOUT, async {
+        let mut addresses = Vec::new();
+
+        let mut addr_stream = handle.address().get().execute();
+        while let Ok(Some(msg)) = addr_stream.try_next().await {
+            if Some(msg.header.index) != ifindex {
+                continue;
+            }
+
+            let prefix_len = msg.header.prefix_len;
+            for attr in &msg.attributes {
+                match attr {
+                    AddressAttribute::Address(addr) => {
+                        addresses.push(format!("{}/{}", addr, prefix_len));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        addresses
+    })
+    .await;
+
+    conn_handle.abort();
+
+    match result {
+        Ok(addrs) => Ok(addrs),
+        Err(_) => Err(EthError::Internal(format!(
+            "rtnetlink address query timed out for {}",
+            name
+        ))),
+    }
+}
+
+fn get_interface_index(name: &str) -> Option<u32> {
+    let path = Path::new(SYS_CLASS_NET).join(name).join("ifindex");
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
 pub async fn get_routes() -> Result<RouteTable, EthError> {
     use netlink_packet_route::route::{RouteAddress, RouteAttribute, RouteProtocol as RtProto, RouteScope as RtScope, RouteType as RtType};
     use std::net::Ipv4Addr;
