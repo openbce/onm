@@ -687,7 +687,7 @@ pub fn get_nat_rules() -> Result<NatTable, EthError> {
     let mut table = NatTable::default();
 
     let output = Command::new("iptables")
-        .args(["-t", "nat", "-L", "-n", "-v", "--line-numbers"])
+        .args(["-t", "nat", "-L", "-n", "-v"])
         .output();
 
     match output {
@@ -735,7 +735,7 @@ fn parse_iptables_nat_output(output: &str, table: &mut NatTable) {
 
 fn parse_nat_rule_line(line: &str, chain: &str) -> Option<NatRule> {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 8 {
+    if parts.len() < 9 {
         return None;
     }
 
@@ -743,11 +743,10 @@ fn parse_nat_rule_line(line: &str, chain: &str) -> Option<NatRule> {
     let bytes: u64 = parts[1].replace("K", "000").replace("M", "000000").parse().unwrap_or(0);
     let target = parts[2];
     let protocol = parts[3];
-    let _opt = parts[4];
     let in_iface = parts[5];
     let out_iface = parts[6];
     let source = parts[7];
-    let destination = parts.get(8).unwrap_or(&"0.0.0.0/0");
+    let destination = parts[8];
 
     let nat_type = match target {
         "SNAT" => NatType::Snat,
@@ -760,8 +759,8 @@ fn parse_nat_rule_line(line: &str, chain: &str) -> Option<NatRule> {
         chain: chain.to_string(),
         nat_type,
         source: if source != "0.0.0.0/0" { Some(source.to_string()) } else { None },
-        destination: if *destination != "0.0.0.0/0" { Some(destination.to_string()) } else { None },
-        protocol: if protocol != "all" { Some(protocol.to_string()) } else { None },
+        destination: if destination != "0.0.0.0/0" { Some(destination.to_string()) } else { None },
+        protocol: if protocol != "all" && protocol != "0" { Some(protocol.to_string()) } else { None },
         dport: None,
         sport: None,
         to_source: None,
