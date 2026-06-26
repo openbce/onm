@@ -32,7 +32,7 @@ pub fn list_interfaces() -> Result<Vec<EthInterface>, EthError> {
         }
 
         let iface_path = entry.path();
-        if !is_ethernet_device(&iface_path) {
+        if !is_network_device(&iface_path) {
             continue;
         }
 
@@ -53,11 +53,20 @@ pub fn get_interface(name: &str) -> Result<EthInterface, EthError> {
     read_interface(name, &iface_path)
 }
 
-fn is_ethernet_device(path: &Path) -> bool {
+fn is_network_device(path: &Path) -> bool {
     let type_path = path.join("type");
     if let Ok(type_content) = fs::read_to_string(&type_path) {
         if let Ok(dev_type) = type_content.trim().parse::<u32>() {
-            return dev_type == 1;
+            return matches!(
+                dev_type,
+                1 |      // ARPHRD_ETHER - Ethernet
+                65534 |  // ARPHRD_NONE - tun/wireguard/tailscale
+                768 |    // ARPHRD_TUNNEL - ipip
+                769 |    // ARPHRD_TUNNEL6 - ip6tnl
+                776 |    // ARPHRD_SIT - sit (IPv6-in-IPv4)
+                778 |    // ARPHRD_IPGRE - gre
+                823      // ARPHRD_IP6GRE - ip6gre
+            );
         }
     }
 
