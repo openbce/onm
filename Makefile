@@ -5,7 +5,7 @@ BINARIES := ethctl smctl hcactl xpuctl
 BUILD_IMAGE := onm-builder
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo docker)
 
-.PHONY: all build release clean install container-builder container-build container-release
+.PHONY: all build release clean install container-builder container-build container-release generate-bindings
 
 all: build
 
@@ -21,6 +21,13 @@ container-build: container-builder
 		-w /workspace \
 		$(BUILD_IMAGE) \
 		cargo build --release
+
+generate-bindings: container-builder
+	$(CONTAINER_ENGINE) run --rm \
+		-v $(CURDIR):/workspace \
+		-w /workspace/libonm \
+		$(BUILD_IMAGE) \
+		cargo build
 
 release: build
 	@mkdir -p $(RELEASE_DIR)/$(RELEASE_NAME)
