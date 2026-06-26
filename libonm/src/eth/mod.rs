@@ -520,6 +520,7 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtScope::Host => RouteScope::Host,
                     RtScope::NoWhere => RouteScope::Nowhere,
                     RtScope::Other(v) => RouteScope::Unknown(v),
+                    _ => RouteScope::Unknown(0),
                 },
                 route_type: match header.kind {
                     RtType::Unicast => RouteType::Unicast,
@@ -535,6 +536,7 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtType::Unspec => RouteType::Unknown(0),
                     RtType::ExternalResolve => RouteType::Unknown(11),
                     RtType::Other(v) => RouteType::Unknown(v),
+                    _ => RouteType::Unknown(0),
                 },
                 protocol: match header.protocol {
                     RtProto::Unspec => RouteProtocol::Unspec,
@@ -544,6 +546,7 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtProto::Dhcp => RouteProtocol::Dhcp,
                     RtProto::Ra => RouteProtocol::Ra,
                     RtProto::Other(v) => RouteProtocol::Unknown(v),
+                    _ => RouteProtocol::Unknown(0),
                 },
                 ..Default::default()
             };
@@ -591,6 +594,7 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtScope::Host => RouteScope::Host,
                     RtScope::NoWhere => RouteScope::Nowhere,
                     RtScope::Other(v) => RouteScope::Unknown(v),
+                    _ => RouteScope::Unknown(0),
                 },
                 route_type: match header.kind {
                     RtType::Unicast => RouteType::Unicast,
@@ -606,6 +610,7 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtType::Unspec => RouteType::Unknown(0),
                     RtType::ExternalResolve => RouteType::Unknown(11),
                     RtType::Other(v) => RouteType::Unknown(v),
+                    _ => RouteType::Unknown(0),
                 },
                 protocol: match header.protocol {
                     RtProto::Unspec => RouteProtocol::Unspec,
@@ -615,6 +620,7 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtProto::Dhcp => RouteProtocol::Dhcp,
                     RtProto::Ra => RouteProtocol::Ra,
                     RtProto::Other(v) => RouteProtocol::Unknown(v),
+                    _ => RouteProtocol::Unknown(0),
                 },
                 ..Default::default()
             };
