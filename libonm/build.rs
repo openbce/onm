@@ -1,13 +1,15 @@
-extern crate bindgen;
-
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rustc-link-lib=pci");
     println!("cargo:rustc-link-lib=ibverbs");
     println!("cargo:rerun-if-changed=wrappers/*");
+    println!("cargo:rerun-if-env-changed=REGENERATE_BINDINGS");
 
-    // Build binding builder
+    if std::env::var("REGENERATE_BINDINGS").is_err() {
+        return;
+    }
+
     let bindings = bindgen::Builder::default()
         .header("wrappers/ib.h")
         .blocklist_type("u8")
@@ -25,10 +27,6 @@ fn main() {
         .constified_enum_module("ibv_wc_opcode")
         .constified_enum_module("ibv_wr_opcode")
         .constified_enum_module("ibv_wc_status")
-        //.constified_enum_module("IBV_WC_.*")
-        //.constified_enum_module("IBV_WR_.*")
-        //.constified_enum_module("IBV_QPS_.*")
-        //.constified_enum_module("IBV_PORT_.*")
         .derive_default(true)
         .derive_debug(true)
         .prepend_enum_name(false)
@@ -38,13 +36,11 @@ fn main() {
         .generate()
         .expect("Unable to generate bindings");
 
-    // Write the bindings to the src/pci.rs file.
     let out_path = PathBuf::from("src/hca/wrappers".to_string());
     bindings
         .write_to_file(out_path.join("ib.rs"))
         .expect("Couldn't write bindings!");
 
-    // Build binding builder
     let bindings = bindgen::Builder::default()
         .header("wrappers/pci.h")
         .blocklist_type("u8")
@@ -55,7 +51,6 @@ fn main() {
         .generate()
         .expect("Unable to generate bindings");
 
-    // Write the bindings to the src/pci.rs file.
     let out_path = PathBuf::from("src/hca/wrappers".to_string());
     bindings
         .write_to_file(out_path.join("pci.rs"))

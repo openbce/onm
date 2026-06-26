@@ -26,6 +26,7 @@ generate-bindings: container-builder
 	$(CONTAINER_ENGINE) run --rm \
 		-v $(CURDIR):/workspace \
 		-w /workspace/libonm \
+		-e REGENERATE_BINDINGS=1 \
 		$(BUILD_IMAGE) \
 		cargo build
 
