@@ -5,7 +5,7 @@ pub fn run() -> Result<(), EthError> {
     let nat_table = eth::get_nat_rules()?;
 
     if nat_table.rules.is_empty() {
-        println!("No NAT rules found (requires root privileges to read iptables)");
+        println!("No NAT rules found (SNAT/DNAT/MASQUERADE)");
         return Ok(());
     }
 
