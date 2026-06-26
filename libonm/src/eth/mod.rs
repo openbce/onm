@@ -496,7 +496,8 @@ pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
 }
 
 pub async fn get_routes() -> Result<RouteTable, EthError> {
-    use netlink_packet_route::route::{RouteAttribute, RouteProtocol as RtProto, RouteScope as RtScope, RouteType as RtType};
+    use netlink_packet_route::route::{RouteAddress, RouteAttribute, RouteProtocol as RtProto, RouteScope as RtScope, RouteType as RtType};
+    use std::net::Ipv4Addr;
 
     let (conn, handle, _) = rtnetlink::new_connection()
         .map_err(|e| EthError::Internal(format!("Failed to create rtnetlink connection: {}", e)))?;
@@ -505,7 +506,8 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
     let result = tokio::time::timeout(NETLINK_TIMEOUT, async {
         let mut table = RouteTable::default();
 
-        let mut ipv4_routes = handle.route().get(rtnetlink::IpVersion::V4).execute();
+        let ipv4_msg = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::new().build();
+        let mut ipv4_routes = handle.route().get(ipv4_msg).execute();
         while let Ok(Some(route)) = ipv4_routes.try_next().await {
             let header = &route.header;
             let mut entry = RouteEntry {
@@ -516,8 +518,8 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtScope::Site => RouteScope::Site,
                     RtScope::Link => RouteScope::Link,
                     RtScope::Host => RouteScope::Host,
-                    RtScope::Nowhere => RouteScope::Nowhere,
-                    _ => RouteScope::Unknown(header.scope.into()),
+                    RtScope::NoWhere => RouteScope::Nowhere,
+                    RtScope::Other(v) => RouteScope::Unknown(v),
                 },
                 route_type: match header.kind {
                     RtType::Unicast => RouteType::Unicast,
@@ -525,22 +527,23 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtType::Broadcast => RouteType::Broadcast,
                     RtType::Anycast => RouteType::Anycast,
                     RtType::Multicast => RouteType::Multicast,
-                    RtType::Blackhole => RouteType::Blackhole,
+                    RtType::BlackHole => RouteType::Blackhole,
                     RtType::Unreachable => RouteType::Unreachable,
                     RtType::Prohibit => RouteType::Prohibit,
                     RtType::Throw => RouteType::Throw,
                     RtType::Nat => RouteType::Nat,
-                    _ => RouteType::Unknown(header.kind.into()),
+                    RtType::Unspec => RouteType::Unknown(0),
+                    RtType::ExternalResolve => RouteType::Unknown(11),
+                    RtType::Other(v) => RouteType::Unknown(v),
                 },
                 protocol: match header.protocol {
                     RtProto::Unspec => RouteProtocol::Unspec,
-                    RtProto::Redirect => RouteProtocol::Redirect,
                     RtProto::Kernel => RouteProtocol::Kernel,
                     RtProto::Boot => RouteProtocol::Boot,
                     RtProto::Static => RouteProtocol::Static,
                     RtProto::Dhcp => RouteProtocol::Dhcp,
                     RtProto::Ra => RouteProtocol::Ra,
-                    _ => RouteProtocol::Unknown(header.protocol.into()),
+                    RtProto::Other(v) => RouteProtocol::Unknown(v),
                 },
                 ..Default::default()
             };
@@ -548,12 +551,12 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
             for attr in &route.attributes {
                 match attr {
                     RouteAttribute::Destination(addr) => {
-                        if let std::net::IpAddr::V4(v4) = addr {
+                        if let RouteAddress::Inet(v4) = addr {
                             entry.destination = format!("{}/{}", v4, entry.prefix_len);
                         }
                     }
                     RouteAttribute::Gateway(addr) => {
-                        if let std::net::IpAddr::V4(v4) = addr {
+                        if let RouteAddress::Inet(v4) = addr {
                             entry.gateway = Some(v4.to_string());
                         }
                     }
@@ -574,7 +577,8 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
             table.ipv4.push(entry);
         }
 
-        let mut ipv6_routes = handle.route().get(rtnetlink::IpVersion::V6).execute();
+        let ipv6_msg = rtnetlink::RouteMessageBuilder::<std::net::Ipv6Addr>::new().build();
+        let mut ipv6_routes = handle.route().get(ipv6_msg).execute();
         while let Ok(Some(route)) = ipv6_routes.try_next().await {
             let header = &route.header;
             let mut entry = RouteEntry {
@@ -585,8 +589,8 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtScope::Site => RouteScope::Site,
                     RtScope::Link => RouteScope::Link,
                     RtScope::Host => RouteScope::Host,
-                    RtScope::Nowhere => RouteScope::Nowhere,
-                    _ => RouteScope::Unknown(header.scope.into()),
+                    RtScope::NoWhere => RouteScope::Nowhere,
+                    RtScope::Other(v) => RouteScope::Unknown(v),
                 },
                 route_type: match header.kind {
                     RtType::Unicast => RouteType::Unicast,
@@ -594,22 +598,23 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
                     RtType::Broadcast => RouteType::Broadcast,
                     RtType::Anycast => RouteType::Anycast,
                     RtType::Multicast => RouteType::Multicast,
-                    RtType::Blackhole => RouteType::Blackhole,
+                    RtType::BlackHole => RouteType::Blackhole,
                     RtType::Unreachable => RouteType::Unreachable,
                     RtType::Prohibit => RouteType::Prohibit,
                     RtType::Throw => RouteType::Throw,
                     RtType::Nat => RouteType::Nat,
-                    _ => RouteType::Unknown(header.kind.into()),
+                    RtType::Unspec => RouteType::Unknown(0),
+                    RtType::ExternalResolve => RouteType::Unknown(11),
+                    RtType::Other(v) => RouteType::Unknown(v),
                 },
                 protocol: match header.protocol {
                     RtProto::Unspec => RouteProtocol::Unspec,
-                    RtProto::Redirect => RouteProtocol::Redirect,
                     RtProto::Kernel => RouteProtocol::Kernel,
                     RtProto::Boot => RouteProtocol::Boot,
                     RtProto::Static => RouteProtocol::Static,
                     RtProto::Dhcp => RouteProtocol::Dhcp,
                     RtProto::Ra => RouteProtocol::Ra,
-                    _ => RouteProtocol::Unknown(header.protocol.into()),
+                    RtProto::Other(v) => RouteProtocol::Unknown(v),
                 },
                 ..Default::default()
             };
@@ -617,12 +622,12 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
             for attr in &route.attributes {
                 match attr {
                     RouteAttribute::Destination(addr) => {
-                        if let std::net::IpAddr::V6(v6) = addr {
+                        if let RouteAddress::Inet6(v6) = addr {
                             entry.destination = format!("{}/{}", v6, entry.prefix_len);
                         }
                     }
                     RouteAttribute::Gateway(addr) => {
-                        if let std::net::IpAddr::V6(v6) = addr {
+                        if let RouteAddress::Inet6(v6) = addr {
                             entry.gateway = Some(v6.to_string());
                         }
                     }
@@ -748,7 +753,7 @@ fn parse_nat_rule_line(line: &str, chain: &str) -> Option<NatRule> {
     let mut rule = NatRule {
         chain: chain.to_string(),
         nat_type,
-        source: if *source != "0.0.0.0/0" { Some(source.to_string()) } else { None },
+        source: if source != "0.0.0.0/0" { Some(source.to_string()) } else { None },
         destination: if *destination != "0.0.0.0/0" { Some(destination.to_string()) } else { None },
         protocol: if protocol != "all" { Some(protocol.to_string()) } else { None },
         dport: None,

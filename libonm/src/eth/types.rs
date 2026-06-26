@@ -333,7 +333,6 @@ impl ToString for RouteType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RouteProtocol {
     Unspec,
-    Redirect,
     Kernel,
     Boot,
     Static,
@@ -352,7 +351,6 @@ impl ToString for RouteProtocol {
     fn to_string(&self) -> String {
         match self {
             RouteProtocol::Unspec => "unspec".to_string(),
-            RouteProtocol::Redirect => "redirect".to_string(),
             RouteProtocol::Kernel => "kernel".to_string(),
             RouteProtocol::Boot => "boot".to_string(),
             RouteProtocol::Static => "static".to_string(),
