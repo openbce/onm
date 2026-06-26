@@ -796,7 +796,6 @@ fn parse_nft_rule_exprs(chain: &str, exprs: &[serde_json::Value], _chain_info: O
     let mut bytes: u64 = 0;
 
     for expr in exprs {
-        // Check for NAT statements
         if expr.get("snat").is_some() {
             nat_type = Some(NatType::Snat);
             if let Some(snat) = expr.get("snat") {
@@ -814,15 +813,24 @@ fn parse_nft_rule_exprs(chain: &str, exprs: &[serde_json::Value], _chain_info: O
             if let Some(masq) = expr.get("masquerade") {
                 to_port = extract_nft_port(masq.get("port"));
             }
+        } else if let Some(xt) = expr.get("xt") {
+            // Handle iptables-nft xtables compatibility layer (e.g., Docker uses this)
+            // Format: {"xt": {"type": "target", "name": "MASQUERADE"}}
+            if xt.get("type").and_then(|t| t.as_str()) == Some("target") {
+                match xt.get("name").and_then(|n| n.as_str()) {
+                    Some("MASQUERADE") => nat_type = Some(NatType::Masquerade),
+                    Some("SNAT") => nat_type = Some(NatType::Snat),
+                    Some("DNAT") => nat_type = Some(NatType::Dnat),
+                    _ => {}
+                }
+            }
         }
 
-        // Extract match conditions
         if let Some(match_expr) = expr.get("match") {
             parse_nft_match(match_expr, &mut protocol, &mut source, &mut destination, 
                            &mut dport, &mut sport, &mut interface_in, &mut interface_out);
         }
 
-        // Extract counter values
         if let Some(counter) = expr.get("counter") {
             packets = counter.get("packets").and_then(|v| v.as_u64()).unwrap_or(0);
             bytes = counter.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
