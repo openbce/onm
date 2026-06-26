@@ -5,6 +5,8 @@ use tracing_subscriber::{filter::EnvFilter, filter::LevelFilter, fmt, prelude::*
 mod info;
 mod link;
 mod list;
+mod nat;
+mod route;
 
 #[derive(Parser)]
 #[command(name = "ethctl")]
@@ -40,6 +42,17 @@ enum Commands {
         #[arg(short, long, default_missing_value = "cmd", num_args = 0..=1)]
         generate: Option<String>,
     },
+    /// Show routing table (IPv4 and IPv6)
+    Route {
+        /// Show only IPv4 routes
+        #[arg(short = '4', long)]
+        ipv4: bool,
+        /// Show only IPv6 routes
+        #[arg(short = '6', long)]
+        ipv6: bool,
+    },
+    /// Show NAT rules (iptables nat table)
+    Nat,
 }
 
 #[tokio::main]
@@ -63,6 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             profile,
             generate,
         } => link::run(&name, &profile, generate.as_deref()).await?,
+        Commands::Route { ipv4, ipv6 } => route::run(ipv4, ipv6).await?,
+        Commands::Nat => nat::run()?,
     }
 
     Ok(())

@@ -8,7 +8,8 @@ use std::time::Duration;
 pub use types::{
     ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
     EthtoolOffload, EthtoolRing, EthtoolSettings, InterfaceStats, InterfaceType, LinkSettings,
-    LinkState, NetworkStats, NetworkSysctl, RpFilterSettings, SocketBufferSettings, SocketStats,
+    LinkState, NatRule, NatTable, NatType, NetworkStats, NetworkSysctl, RouteEntry, RouteProtocol,
+    RouteScope, RouteTable, RouteType, RpFilterSettings, SocketBufferSettings, SocketStats,
     SoftnetCpuStats, SoftnetStats, TcpSettings, UdpSettings,
 };
 
@@ -492,4 +493,291 @@ pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
             name
         ))),
     }
+}
+
+pub async fn get_routes() -> Result<RouteTable, EthError> {
+    use netlink_packet_route::route::{RouteAttribute, RouteProtocol as RtProto, RouteScope as RtScope, RouteType as RtType};
+
+    let (conn, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| EthError::Internal(format!("Failed to create rtnetlink connection: {}", e)))?;
+    let conn_handle = tokio::spawn(conn);
+
+    let result = tokio::time::timeout(NETLINK_TIMEOUT, async {
+        let mut table = RouteTable::default();
+
+        let mut ipv4_routes = handle.route().get(rtnetlink::IpVersion::V4).execute();
+        while let Ok(Some(route)) = ipv4_routes.try_next().await {
+            let header = &route.header;
+            let mut entry = RouteEntry {
+                prefix_len: header.destination_prefix_length,
+                table: header.table,
+                scope: match header.scope {
+                    RtScope::Universe => RouteScope::Universe,
+                    RtScope::Site => RouteScope::Site,
+                    RtScope::Link => RouteScope::Link,
+                    RtScope::Host => RouteScope::Host,
+                    RtScope::Nowhere => RouteScope::Nowhere,
+                    _ => RouteScope::Unknown(header.scope.into()),
+                },
+                route_type: match header.kind {
+                    RtType::Unicast => RouteType::Unicast,
+                    RtType::Local => RouteType::Local,
+                    RtType::Broadcast => RouteType::Broadcast,
+                    RtType::Anycast => RouteType::Anycast,
+                    RtType::Multicast => RouteType::Multicast,
+                    RtType::Blackhole => RouteType::Blackhole,
+                    RtType::Unreachable => RouteType::Unreachable,
+                    RtType::Prohibit => RouteType::Prohibit,
+                    RtType::Throw => RouteType::Throw,
+                    RtType::Nat => RouteType::Nat,
+                    _ => RouteType::Unknown(header.kind.into()),
+                },
+                protocol: match header.protocol {
+                    RtProto::Unspec => RouteProtocol::Unspec,
+                    RtProto::Redirect => RouteProtocol::Redirect,
+                    RtProto::Kernel => RouteProtocol::Kernel,
+                    RtProto::Boot => RouteProtocol::Boot,
+                    RtProto::Static => RouteProtocol::Static,
+                    RtProto::Dhcp => RouteProtocol::Dhcp,
+                    RtProto::Ra => RouteProtocol::Ra,
+                    _ => RouteProtocol::Unknown(header.protocol.into()),
+                },
+                ..Default::default()
+            };
+
+            for attr in &route.attributes {
+                match attr {
+                    RouteAttribute::Destination(addr) => {
+                        if let std::net::IpAddr::V4(v4) = addr {
+                            entry.destination = format!("{}/{}", v4, entry.prefix_len);
+                        }
+                    }
+                    RouteAttribute::Gateway(addr) => {
+                        if let std::net::IpAddr::V4(v4) = addr {
+                            entry.gateway = Some(v4.to_string());
+                        }
+                    }
+                    RouteAttribute::Oif(idx) => {
+                        entry.interface = get_interface_name_by_index(*idx);
+                    }
+                    RouteAttribute::Priority(p) => {
+                        entry.metric = Some(*p);
+                    }
+                    _ => {}
+                }
+            }
+
+            if entry.destination.is_empty() {
+                entry.destination = format!("0.0.0.0/{}", entry.prefix_len);
+            }
+
+            table.ipv4.push(entry);
+        }
+
+        let mut ipv6_routes = handle.route().get(rtnetlink::IpVersion::V6).execute();
+        while let Ok(Some(route)) = ipv6_routes.try_next().await {
+            let header = &route.header;
+            let mut entry = RouteEntry {
+                prefix_len: header.destination_prefix_length,
+                table: header.table,
+                scope: match header.scope {
+                    RtScope::Universe => RouteScope::Universe,
+                    RtScope::Site => RouteScope::Site,
+                    RtScope::Link => RouteScope::Link,
+                    RtScope::Host => RouteScope::Host,
+                    RtScope::Nowhere => RouteScope::Nowhere,
+                    _ => RouteScope::Unknown(header.scope.into()),
+                },
+                route_type: match header.kind {
+                    RtType::Unicast => RouteType::Unicast,
+                    RtType::Local => RouteType::Local,
+                    RtType::Broadcast => RouteType::Broadcast,
+                    RtType::Anycast => RouteType::Anycast,
+                    RtType::Multicast => RouteType::Multicast,
+                    RtType::Blackhole => RouteType::Blackhole,
+                    RtType::Unreachable => RouteType::Unreachable,
+                    RtType::Prohibit => RouteType::Prohibit,
+                    RtType::Throw => RouteType::Throw,
+                    RtType::Nat => RouteType::Nat,
+                    _ => RouteType::Unknown(header.kind.into()),
+                },
+                protocol: match header.protocol {
+                    RtProto::Unspec => RouteProtocol::Unspec,
+                    RtProto::Redirect => RouteProtocol::Redirect,
+                    RtProto::Kernel => RouteProtocol::Kernel,
+                    RtProto::Boot => RouteProtocol::Boot,
+                    RtProto::Static => RouteProtocol::Static,
+                    RtProto::Dhcp => RouteProtocol::Dhcp,
+                    RtProto::Ra => RouteProtocol::Ra,
+                    _ => RouteProtocol::Unknown(header.protocol.into()),
+                },
+                ..Default::default()
+            };
+
+            for attr in &route.attributes {
+                match attr {
+                    RouteAttribute::Destination(addr) => {
+                        if let std::net::IpAddr::V6(v6) = addr {
+                            entry.destination = format!("{}/{}", v6, entry.prefix_len);
+                        }
+                    }
+                    RouteAttribute::Gateway(addr) => {
+                        if let std::net::IpAddr::V6(v6) = addr {
+                            entry.gateway = Some(v6.to_string());
+                        }
+                    }
+                    RouteAttribute::Oif(idx) => {
+                        entry.interface = get_interface_name_by_index(*idx);
+                    }
+                    RouteAttribute::Priority(p) => {
+                        entry.metric = Some(*p);
+                    }
+                    _ => {}
+                }
+            }
+
+            if entry.destination.is_empty() {
+                entry.destination = format!("::{}", entry.prefix_len);
+            }
+
+            table.ipv6.push(entry);
+        }
+
+        table
+    })
+    .await;
+
+    conn_handle.abort();
+
+    match result {
+        Ok(table) => Ok(table),
+        Err(_) => Err(EthError::Internal("rtnetlink route query timed out".to_string())),
+    }
+}
+
+fn get_interface_name_by_index(index: u32) -> Option<String> {
+    let entries = fs::read_dir(SYS_CLASS_NET).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path().join("ifindex");
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(idx) = content.trim().parse::<u32>() {
+                if idx == index {
+                    return Some(entry.file_name().to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn get_nat_rules() -> Result<NatTable, EthError> {
+    use std::process::Command;
+
+    let mut table = NatTable::default();
+
+    let output = Command::new("iptables")
+        .args(["-t", "nat", "-L", "-n", "-v", "--line-numbers"])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            parse_iptables_nat_output(&stdout, &mut table);
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.contains("Permission denied") && !stderr.contains("not found") {
+                tracing::debug!("iptables nat query failed: {}", stderr);
+            }
+        }
+        Err(e) => {
+            tracing::debug!("Failed to run iptables: {}", e);
+        }
+    }
+
+    Ok(table)
+}
+
+fn parse_iptables_nat_output(output: &str, table: &mut NatTable) {
+    let mut current_chain = String::new();
+
+    for line in output.lines() {
+        let line = line.trim();
+
+        if line.starts_with("Chain ") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                current_chain = parts[1].to_string();
+            }
+            continue;
+        }
+
+        if line.starts_with("num") || line.starts_with("pkts") || line.is_empty() {
+            continue;
+        }
+
+        if let Some(rule) = parse_nat_rule_line(line, &current_chain) {
+            table.rules.push(rule);
+        }
+    }
+}
+
+fn parse_nat_rule_line(line: &str, chain: &str) -> Option<NatRule> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 8 {
+        return None;
+    }
+
+    let packets: u64 = parts[0].replace("K", "000").replace("M", "000000").parse().unwrap_or(0);
+    let bytes: u64 = parts[1].replace("K", "000").replace("M", "000000").parse().unwrap_or(0);
+    let target = parts[2];
+    let protocol = parts[3];
+    let _opt = parts[4];
+    let in_iface = parts[5];
+    let out_iface = parts[6];
+    let source = parts[7];
+    let destination = parts.get(8).unwrap_or(&"0.0.0.0/0");
+
+    let nat_type = match target {
+        "SNAT" => NatType::Snat,
+        "DNAT" => NatType::Dnat,
+        "MASQUERADE" => NatType::Masquerade,
+        _ => return None,
+    };
+
+    let mut rule = NatRule {
+        chain: chain.to_string(),
+        nat_type,
+        source: if *source != "0.0.0.0/0" { Some(source.to_string()) } else { None },
+        destination: if *destination != "0.0.0.0/0" { Some(destination.to_string()) } else { None },
+        protocol: if protocol != "all" { Some(protocol.to_string()) } else { None },
+        dport: None,
+        sport: None,
+        to_source: None,
+        to_destination: None,
+        interface_in: if in_iface != "*" { Some(in_iface.to_string()) } else { None },
+        interface_out: if out_iface != "*" { Some(out_iface.to_string()) } else { None },
+        packets,
+        bytes,
+    };
+
+    let remainder = parts[9..].join(" ");
+    if let Some(pos) = remainder.find("to:") {
+        let to_val = remainder[pos + 3..].split_whitespace().next().unwrap_or("");
+        match rule.nat_type {
+            NatType::Snat | NatType::Masquerade => rule.to_source = Some(to_val.to_string()),
+            NatType::Dnat => rule.to_destination = Some(to_val.to_string()),
+        }
+    }
+
+    if let Some(pos) = remainder.find("dpt:") {
+        let dport = remainder[pos + 4..].split_whitespace().next().unwrap_or("");
+        rule.dport = Some(dport.to_string());
+    }
+    if let Some(pos) = remainder.find("spt:") {
+        let sport = remainder[pos + 4..].split_whitespace().next().unwrap_or("");
+        rule.sport = Some(sport.to_string());
+    }
+
+    Some(rule)
 }

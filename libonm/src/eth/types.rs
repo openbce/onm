@@ -260,3 +260,164 @@ pub struct LinkSettings {
     pub qdisc: Option<String>,
     pub group: Option<u32>,
 }
+
+// Route types
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RouteScope {
+    Universe,
+    Site,
+    Link,
+    Host,
+    Nowhere,
+    Unknown(u8),
+}
+
+impl Default for RouteScope {
+    fn default() -> Self {
+        RouteScope::Universe
+    }
+}
+
+impl ToString for RouteScope {
+    fn to_string(&self) -> String {
+        match self {
+            RouteScope::Universe => "universe".to_string(),
+            RouteScope::Site => "site".to_string(),
+            RouteScope::Link => "link".to_string(),
+            RouteScope::Host => "host".to_string(),
+            RouteScope::Nowhere => "nowhere".to_string(),
+            RouteScope::Unknown(v) => format!("unknown({})", v),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RouteType {
+    Unicast,
+    Local,
+    Broadcast,
+    Anycast,
+    Multicast,
+    Blackhole,
+    Unreachable,
+    Prohibit,
+    Throw,
+    Nat,
+    Unknown(u8),
+}
+
+impl Default for RouteType {
+    fn default() -> Self {
+        RouteType::Unicast
+    }
+}
+
+impl ToString for RouteType {
+    fn to_string(&self) -> String {
+        match self {
+            RouteType::Unicast => "unicast".to_string(),
+            RouteType::Local => "local".to_string(),
+            RouteType::Broadcast => "broadcast".to_string(),
+            RouteType::Anycast => "anycast".to_string(),
+            RouteType::Multicast => "multicast".to_string(),
+            RouteType::Blackhole => "blackhole".to_string(),
+            RouteType::Unreachable => "unreachable".to_string(),
+            RouteType::Prohibit => "prohibit".to_string(),
+            RouteType::Throw => "throw".to_string(),
+            RouteType::Nat => "nat".to_string(),
+            RouteType::Unknown(v) => format!("unknown({})", v),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RouteProtocol {
+    Unspec,
+    Redirect,
+    Kernel,
+    Boot,
+    Static,
+    Dhcp,
+    Ra,
+    Unknown(u8),
+}
+
+impl Default for RouteProtocol {
+    fn default() -> Self {
+        RouteProtocol::Unspec
+    }
+}
+
+impl ToString for RouteProtocol {
+    fn to_string(&self) -> String {
+        match self {
+            RouteProtocol::Unspec => "unspec".to_string(),
+            RouteProtocol::Redirect => "redirect".to_string(),
+            RouteProtocol::Kernel => "kernel".to_string(),
+            RouteProtocol::Boot => "boot".to_string(),
+            RouteProtocol::Static => "static".to_string(),
+            RouteProtocol::Dhcp => "dhcp".to_string(),
+            RouteProtocol::Ra => "ra".to_string(),
+            RouteProtocol::Unknown(v) => format!("unknown({})", v),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RouteEntry {
+    pub destination: String,
+    pub gateway: Option<String>,
+    pub interface: Option<String>,
+    pub metric: Option<u32>,
+    pub scope: RouteScope,
+    pub route_type: RouteType,
+    pub protocol: RouteProtocol,
+    pub table: u8,
+    pub prefix_len: u8,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RouteTable {
+    pub ipv4: Vec<RouteEntry>,
+    pub ipv6: Vec<RouteEntry>,
+}
+
+// NAT types (iptables/nftables)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum NatType {
+    Snat,
+    Dnat,
+    Masquerade,
+}
+
+impl ToString for NatType {
+    fn to_string(&self) -> String {
+        match self {
+            NatType::Snat => "SNAT".to_string(),
+            NatType::Dnat => "DNAT".to_string(),
+            NatType::Masquerade => "MASQUERADE".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NatRule {
+    pub chain: String,
+    pub nat_type: NatType,
+    pub source: Option<String>,
+    pub destination: Option<String>,
+    pub protocol: Option<String>,
+    pub dport: Option<String>,
+    pub sport: Option<String>,
+    pub to_source: Option<String>,
+    pub to_destination: Option<String>,
+    pub interface_in: Option<String>,
+    pub interface_out: Option<String>,
+    pub packets: u64,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct NatTable {
+    pub rules: Vec<NatRule>,
+}
