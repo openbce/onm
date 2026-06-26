@@ -35,6 +35,22 @@ print_header() {
     echo -e "${CYAN}$1:${NC}"
 }
 
+print_table() {
+    column -t -s $'\t'
+}
+
+print_table_with_header() {
+    local first=true
+    while IFS= read -r line; do
+        echo "$line"
+        if [[ "$first" == true ]]; then
+            local len=${#line}
+            printf '%s\n' "$(printf '=%.0s' $(seq 1 $len))"
+            first=false
+        fi
+    done < <(column -t -s $'\t')
+}
+
 format_size() {
     local bytes=$1
     if [[ $bytes -ge 1073741824 ]]; then
@@ -212,36 +228,33 @@ cmd_list() {
         return 0
     fi
     
-    printf "%-15s %-18s %-6s %-8s %-12s %-15s %-15s\n" \
-        "Name" "MAC Address" "MTU" "State" "Speed(Mbps)" "Driver" "PCI Slot"
-    printf "%s\n" "$(printf '=%.0s' {1..100})"
-    
-    for iface in $interfaces; do
-        local mac mtu state speed driver pci_slot
+    {
+        echo -e "Name\tMAC Address\tMTU\tState\tSpeed(Mbps)\tDriver\tPCI Slot"
         
-        mac=$(read_file "/sys/class/net/$iface/address")
-        mtu=$(read_file "/sys/class/net/$iface/mtu")
-        state=$(read_file "/sys/class/net/$iface/operstate")
-        speed=$(read_file "/sys/class/net/$iface/speed" 2>/dev/null || echo "-")
-        [[ "$speed" == "-1" ]] && speed="-"
-        
-        # Get driver info
-        if [[ -L "/sys/class/net/$iface/device/driver" ]]; then
-            driver=$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)" 2>/dev/null || echo "-")
-        else
-            driver="-"
-        fi
-        
-        # Get PCI slot
-        if [[ -L "/sys/class/net/$iface/device" ]]; then
-            pci_slot=$(basename "$(readlink -f /sys/class/net/$iface/device 2>/dev/null)" 2>/dev/null || echo "-")
-        else
-            pci_slot="-"
-        fi
-        
-        printf "%-15s %-18s %-6s %-8s %-12s %-15s %-15s\n" \
-            "$iface" "${mac:-"-"}" "${mtu:-"-"}" "${state:-"-"}" "${speed:-"-"}" "${driver:-"-"}" "${pci_slot:-"-"}"
-    done
+        for iface in $interfaces; do
+            local mac mtu state speed driver pci_slot
+            
+            mac=$(read_file "/sys/class/net/$iface/address")
+            mtu=$(read_file "/sys/class/net/$iface/mtu")
+            state=$(read_file "/sys/class/net/$iface/operstate")
+            speed=$(read_file "/sys/class/net/$iface/speed" 2>/dev/null || echo "-")
+            [[ "$speed" == "-1" ]] && speed="-"
+            
+            if [[ -L "/sys/class/net/$iface/device/driver" ]]; then
+                driver=$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)" 2>/dev/null || echo "-")
+            else
+                driver="-"
+            fi
+            
+            if [[ -L "/sys/class/net/$iface/device" ]]; then
+                pci_slot=$(basename "$(readlink -f /sys/class/net/$iface/device 2>/dev/null)" 2>/dev/null || echo "-")
+            else
+                pci_slot="-"
+            fi
+            
+            echo -e "$iface\t${mac:-"-"}\t${mtu:-"-"}\t${state:-"-"}\t${speed:-"-"}\t${driver:-"-"}\t${pci_slot:-"-"}"
+        done
+    } | print_table_with_header
 }
 
 # ============================================================================
@@ -276,62 +289,63 @@ cmd_info() {
         return 0
     fi
     
-    # Display sysctl info table
-    print_header "Overview"
-    printf "  %-45s %-20s %-20s\n" "Profile" "$PROFILE_NAME" "-"
-    echo
-    
     print_sysctl_table
     echo
     print_interfaces_table
 }
 
 print_sysctl_table() {
-    print_header "Connection Tracking"
-    print_sysctl_row "nf_conntrack_max" "net.netfilter.nf_conntrack_max" "$CONNTRACK_MAX"
-    print_sysctl_row "nf_conntrack_buckets" "net.netfilter.nf_conntrack_buckets" "$CONNTRACK_BUCKETS"
-    print_sysctl_row "nf_conntrack_tcp_timeout_established" "net.netfilter.nf_conntrack_tcp_timeout_established" "$CONNTRACK_TCP_TIMEOUT_ESTABLISHED"
-    print_sysctl_row "nf_conntrack_tcp_timeout_time_wait" "net.netfilter.nf_conntrack_tcp_timeout_time_wait" "$CONNTRACK_TCP_TIMEOUT_TIME_WAIT"
-    print_sysctl_row "nf_conntrack_tcp_timeout_close_wait" "net.netfilter.nf_conntrack_tcp_timeout_close_wait" "$CONNTRACK_TCP_TIMEOUT_CLOSE_WAIT"
-    print_sysctl_row "nf_conntrack_tcp_timeout_fin_wait" "net.netfilter.nf_conntrack_tcp_timeout_fin_wait" "$CONNTRACK_TCP_TIMEOUT_FIN_WAIT"
-    print_sysctl_row "nf_conntrack_tcp_max_retrans" "net.netfilter.nf_conntrack_tcp_max_retrans" "$CONNTRACK_TCP_MAX_RETRANS"
-    echo
-    
-    print_header "Socket Buffers"
-    print_sysctl_row_bytes "net.core.rmem_max" "net.core.rmem_max" "$RMEM_MAX"
-    print_sysctl_row_bytes "net.core.wmem_max" "net.core.wmem_max" "$WMEM_MAX"
-    print_sysctl_row_bytes "net.core.rmem_default" "net.core.rmem_default" "$RMEM_DEFAULT"
-    print_sysctl_row_bytes "net.core.wmem_default" "net.core.wmem_default" "$WMEM_DEFAULT"
-    print_sysctl_row_str "net.ipv4.tcp_rmem" "net.ipv4.tcp_rmem" "$TCP_RMEM"
-    print_sysctl_row_str "net.ipv4.tcp_wmem" "net.ipv4.tcp_wmem" "$TCP_WMEM"
-    print_sysctl_row "net.core.netdev_max_backlog" "net.core.netdev_max_backlog" "$NETDEV_MAX_BACKLOG"
-    print_sysctl_row_bytes "net.ipv4.udp_rmem_min" "net.ipv4.udp_rmem_min" "$UDP_RMEM_MIN"
-    print_sysctl_row_bytes "net.ipv4.udp_wmem_min" "net.ipv4.udp_wmem_min" "$UDP_WMEM_MIN"
-    print_sysctl_row_str "net.ipv4.udp_mem" "net.ipv4.udp_mem" "$UDP_MEM"
-    echo
-    
-    print_header "TCP Settings"
-    print_sysctl_row "net.core.somaxconn" "net.core.somaxconn" "$SOMAXCONN"
-    print_sysctl_row "net.ipv4.tcp_max_syn_backlog" "net.ipv4.tcp_max_syn_backlog" "$TCP_MAX_SYN_BACKLOG"
-    print_sysctl_row "net.ipv4.tcp_tw_reuse" "net.ipv4.tcp_tw_reuse" "$TCP_TW_REUSE"
-    print_sysctl_row "net.ipv4.tcp_fin_timeout" "net.ipv4.tcp_fin_timeout" "$TCP_FIN_TIMEOUT"
-    print_sysctl_row "net.ipv4.tcp_keepalive_time" "net.ipv4.tcp_keepalive_time" "$TCP_KEEPALIVE_TIME"
-    print_sysctl_row "net.ipv4.tcp_keepalive_probes" "net.ipv4.tcp_keepalive_probes" "$TCP_KEEPALIVE_PROBES"
-    print_sysctl_row "net.ipv4.tcp_keepalive_intvl" "net.ipv4.tcp_keepalive_intvl" "$TCP_KEEPALIVE_INTVL"
-    print_sysctl_row_str "net.ipv4.ip_local_port_range" "net.ipv4.ip_local_port_range" "$IP_LOCAL_PORT_RANGE"
-    echo
-    
-    print_header "ARP / Neighbor Table"
-    print_sysctl_row "net.ipv4.neigh.default.gc_thresh1" "net.ipv4.neigh.default.gc_thresh1" "$ARP_GC_THRESH1"
-    print_sysctl_row "net.ipv4.neigh.default.gc_thresh2" "net.ipv4.neigh.default.gc_thresh2" "$ARP_GC_THRESH2"
-    print_sysctl_row "net.ipv4.neigh.default.gc_thresh3" "net.ipv4.neigh.default.gc_thresh3" "$ARP_GC_THRESH3"
-    print_sysctl_row "net.ipv4.conf.all.arp_ignore" "net.ipv4.conf.all.arp_ignore" "$ARP_IGNORE"
-    print_sysctl_row "net.ipv4.conf.all.arp_announce" "net.ipv4.conf.all.arp_announce" "$ARP_ANNOUNCE"
-    echo
-    
-    print_header "Reverse Path Filtering"
-    print_sysctl_row "net.ipv4.conf.all.rp_filter" "net.ipv4.conf.all.rp_filter" "$RP_FILTER"
-    print_sysctl_row "net.ipv4.conf.default.rp_filter" "net.ipv4.conf.default.rp_filter" "$RP_FILTER"
+    {
+        echo -e "${CYAN}Overview:${NC}\t\t"
+        echo -e "  Profile\t$PROFILE_NAME\t-"
+        
+        echo -e "\t\t"
+        echo -e "${CYAN}Connection Tracking:${NC}\t\t"
+        print_sysctl_row "nf_conntrack_max" "net.netfilter.nf_conntrack_max" "$CONNTRACK_MAX"
+        print_sysctl_row "nf_conntrack_buckets" "net.netfilter.nf_conntrack_buckets" "$CONNTRACK_BUCKETS"
+        print_sysctl_row "nf_conntrack_tcp_timeout_established" "net.netfilter.nf_conntrack_tcp_timeout_established" "$CONNTRACK_TCP_TIMEOUT_ESTABLISHED"
+        print_sysctl_row "nf_conntrack_tcp_timeout_time_wait" "net.netfilter.nf_conntrack_tcp_timeout_time_wait" "$CONNTRACK_TCP_TIMEOUT_TIME_WAIT"
+        print_sysctl_row "nf_conntrack_tcp_timeout_close_wait" "net.netfilter.nf_conntrack_tcp_timeout_close_wait" "$CONNTRACK_TCP_TIMEOUT_CLOSE_WAIT"
+        print_sysctl_row "nf_conntrack_tcp_timeout_fin_wait" "net.netfilter.nf_conntrack_tcp_timeout_fin_wait" "$CONNTRACK_TCP_TIMEOUT_FIN_WAIT"
+        print_sysctl_row "nf_conntrack_tcp_max_retrans" "net.netfilter.nf_conntrack_tcp_max_retrans" "$CONNTRACK_TCP_MAX_RETRANS"
+        
+        echo -e "\t\t"
+        echo -e "${CYAN}Socket Buffers:${NC}\t\t"
+        print_sysctl_row_bytes "net.core.rmem_max" "net.core.rmem_max" "$RMEM_MAX"
+        print_sysctl_row_bytes "net.core.wmem_max" "net.core.wmem_max" "$WMEM_MAX"
+        print_sysctl_row_bytes "net.core.rmem_default" "net.core.rmem_default" "$RMEM_DEFAULT"
+        print_sysctl_row_bytes "net.core.wmem_default" "net.core.wmem_default" "$WMEM_DEFAULT"
+        print_sysctl_row_str "net.ipv4.tcp_rmem" "net.ipv4.tcp_rmem" "$TCP_RMEM"
+        print_sysctl_row_str "net.ipv4.tcp_wmem" "net.ipv4.tcp_wmem" "$TCP_WMEM"
+        print_sysctl_row "net.core.netdev_max_backlog" "net.core.netdev_max_backlog" "$NETDEV_MAX_BACKLOG"
+        print_sysctl_row_bytes "net.ipv4.udp_rmem_min" "net.ipv4.udp_rmem_min" "$UDP_RMEM_MIN"
+        print_sysctl_row_bytes "net.ipv4.udp_wmem_min" "net.ipv4.udp_wmem_min" "$UDP_WMEM_MIN"
+        print_sysctl_row_str "net.ipv4.udp_mem" "net.ipv4.udp_mem" "$UDP_MEM"
+        
+        echo -e "\t\t"
+        echo -e "${CYAN}TCP Settings:${NC}\t\t"
+        print_sysctl_row "net.core.somaxconn" "net.core.somaxconn" "$SOMAXCONN"
+        print_sysctl_row "net.ipv4.tcp_max_syn_backlog" "net.ipv4.tcp_max_syn_backlog" "$TCP_MAX_SYN_BACKLOG"
+        print_sysctl_row "net.ipv4.tcp_tw_reuse" "net.ipv4.tcp_tw_reuse" "$TCP_TW_REUSE"
+        print_sysctl_row "net.ipv4.tcp_fin_timeout" "net.ipv4.tcp_fin_timeout" "$TCP_FIN_TIMEOUT"
+        print_sysctl_row "net.ipv4.tcp_keepalive_time" "net.ipv4.tcp_keepalive_time" "$TCP_KEEPALIVE_TIME"
+        print_sysctl_row "net.ipv4.tcp_keepalive_probes" "net.ipv4.tcp_keepalive_probes" "$TCP_KEEPALIVE_PROBES"
+        print_sysctl_row "net.ipv4.tcp_keepalive_intvl" "net.ipv4.tcp_keepalive_intvl" "$TCP_KEEPALIVE_INTVL"
+        print_sysctl_row_str "net.ipv4.ip_local_port_range" "net.ipv4.ip_local_port_range" "$IP_LOCAL_PORT_RANGE"
+        
+        echo -e "\t\t"
+        echo -e "${CYAN}ARP / Neighbor Table:${NC}\t\t"
+        print_sysctl_row "net.ipv4.neigh.default.gc_thresh1" "net.ipv4.neigh.default.gc_thresh1" "$ARP_GC_THRESH1"
+        print_sysctl_row "net.ipv4.neigh.default.gc_thresh2" "net.ipv4.neigh.default.gc_thresh2" "$ARP_GC_THRESH2"
+        print_sysctl_row "net.ipv4.neigh.default.gc_thresh3" "net.ipv4.neigh.default.gc_thresh3" "$ARP_GC_THRESH3"
+        print_sysctl_row "net.ipv4.conf.all.arp_ignore" "net.ipv4.conf.all.arp_ignore" "$ARP_IGNORE"
+        print_sysctl_row "net.ipv4.conf.all.arp_announce" "net.ipv4.conf.all.arp_announce" "$ARP_ANNOUNCE"
+        
+        echo -e "\t\t"
+        echo -e "${CYAN}Reverse Path Filtering:${NC}\t\t"
+        print_sysctl_row "net.ipv4.conf.all.rp_filter" "net.ipv4.conf.all.rp_filter" "$RP_FILTER"
+        print_sysctl_row "net.ipv4.conf.default.rp_filter" "net.ipv4.conf.default.rp_filter" "$RP_FILTER"
+    } | print_table
 }
 
 print_sysctl_row() {
@@ -340,7 +354,7 @@ print_sysctl_row() {
     local suggested=$3
     local current
     current=$(read_sysctl "$key")
-    printf "  %-45s %-20s %-20s\n" "$name" "${current:-"-"}" "$suggested"
+    echo -e "  $name\t${current:-"-"}\t$suggested"
 }
 
 print_sysctl_row_bytes() {
@@ -353,7 +367,7 @@ print_sysctl_row_bytes() {
     [[ -n "$current" ]] && current_fmt=$(format_size "$current")
     local suggested_fmt
     suggested_fmt=$(format_size "$suggested")
-    printf "  %-45s %-20s %-20s\n" "$name" "$current_fmt" "$suggested_fmt"
+    echo -e "  $name\t$current_fmt\t$suggested_fmt"
 }
 
 print_sysctl_row_str() {
@@ -362,7 +376,7 @@ print_sysctl_row_str() {
     local suggested=$3
     local current
     current=$(read_sysctl "$key")
-    printf "  %-45s %-20s %-20s\n" "$name" "${current:-"-"}" "$suggested"
+    echo -e "  $name\t${current:-"-"}\t$suggested"
 }
 
 print_interfaces_table() {
@@ -374,54 +388,51 @@ print_interfaces_table() {
     fi
     
     print_header "Interfaces"
-    printf "  %-12s %-18s %-10s %-10s %-8s %-8s %-8s %-6s %-12s %-10s\n" \
-        "Name" "MAC Address" "MTU" "TXQ" "State" "Speed" "Duplex" "NUMA" "Driver" "Type"
-    
-    for iface in $interfaces; do
-        local mac mtu txq state speed duplex numa driver iface_type
+    {
+        echo -e "  Name\tMAC Address\tMTU\tTXQ\tState\tSpeed\tDuplex\tNUMA\tDriver\tType"
         
-        mac=$(read_file "/sys/class/net/$iface/address")
-        mtu=$(read_file "/sys/class/net/$iface/mtu")
-        txq=$(read_file "/sys/class/net/$iface/tx_queue_len")
-        state=$(read_file "/sys/class/net/$iface/operstate")
-        speed=$(read_file "/sys/class/net/$iface/speed" 2>/dev/null || echo "-")
-        [[ "$speed" == "-1" ]] && speed="-"
-        duplex=$(read_file "/sys/class/net/$iface/duplex" 2>/dev/null || echo "-")
-        numa=$(read_file "/sys/class/net/$iface/device/numa_node" 2>/dev/null || echo "-")
-        [[ "$numa" == "-1" ]] && numa="-"
-        
-        # Get driver
-        if [[ -L "/sys/class/net/$iface/device/driver" ]]; then
-            driver=$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)" 2>/dev/null || echo "-")
-        else
-            driver="-"
-        fi
-        
-        # Determine interface type
-        if [[ -d "/sys/class/net/$iface/bridge" ]]; then
-            iface_type="bridge"
-        elif [[ -d "/sys/class/net/$iface/bonding" ]]; then
-            iface_type="bond"
-        elif [[ -f "/sys/class/net/$iface/tun_flags" ]]; then
-            iface_type="tun"
-        elif [[ "$iface" == veth* ]]; then
-            iface_type="veth"
-        elif [[ -d "/sys/class/net/$iface/device" ]]; then
-            iface_type="physical"
-        else
-            iface_type="virtual"
-        fi
-        
-        # Format with suggested values
-        local mtu_str txq_str
-        mtu_str="${mtu:-"-"}"
-        [[ -n "$mtu" && "$mtu" != "$MTU" ]] && mtu_str="$mtu ($MTU)"
-        txq_str="${txq:-"-"}"
-        [[ -n "$txq" && "$txq" != "$TXQUEUELEN" ]] && txq_str="$txq ($TXQUEUELEN)"
-        
-        printf "  %-12s %-18s %-10s %-10s %-8s %-8s %-8s %-6s %-12s %-10s\n" \
-            "$iface" "${mac:-"-"}" "$mtu_str" "$txq_str" "${state:-"-"}" "${speed:-"-"}" "${duplex:-"-"}" "${numa:-"-"}" "${driver:-"-"}" "$iface_type"
-    done
+        for iface in $interfaces; do
+            local mac mtu txq state speed duplex numa driver iface_type
+            
+            mac=$(read_file "/sys/class/net/$iface/address")
+            mtu=$(read_file "/sys/class/net/$iface/mtu")
+            txq=$(read_file "/sys/class/net/$iface/tx_queue_len")
+            state=$(read_file "/sys/class/net/$iface/operstate")
+            speed=$(read_file "/sys/class/net/$iface/speed" 2>/dev/null || echo "-")
+            [[ "$speed" == "-1" ]] && speed="-"
+            duplex=$(read_file "/sys/class/net/$iface/duplex" 2>/dev/null || echo "-")
+            numa=$(read_file "/sys/class/net/$iface/device/numa_node" 2>/dev/null || echo "-")
+            [[ "$numa" == "-1" ]] && numa="-"
+            
+            if [[ -L "/sys/class/net/$iface/device/driver" ]]; then
+                driver=$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)" 2>/dev/null || echo "-")
+            else
+                driver="-"
+            fi
+            
+            if [[ -d "/sys/class/net/$iface/bridge" ]]; then
+                iface_type="bridge"
+            elif [[ -d "/sys/class/net/$iface/bonding" ]]; then
+                iface_type="bond"
+            elif [[ -f "/sys/class/net/$iface/tun_flags" ]]; then
+                iface_type="tun"
+            elif [[ "$iface" == veth* ]]; then
+                iface_type="veth"
+            elif [[ -d "/sys/class/net/$iface/device" ]]; then
+                iface_type="physical"
+            else
+                iface_type="virtual"
+            fi
+            
+            local mtu_str txq_str
+            mtu_str="${mtu:-"-"}"
+            [[ -n "$mtu" && "$mtu" != "$MTU" ]] && mtu_str="$mtu ($MTU)"
+            txq_str="${txq:-"-"}"
+            [[ -n "$txq" && "$txq" != "$TXQUEUELEN" ]] && txq_str="$txq ($TXQUEUELEN)"
+            
+            echo -e "  $iface\t${mac:-"-"}\t$mtu_str\t$txq_str\t${state:-"-"}\t${speed:-"-"}\t${duplex:-"-"}\t${numa:-"-"}\t${driver:-"-"}\t$iface_type"
+        done
+    } | print_table_with_header
 }
 
 generate_sysctl_output() {
@@ -641,11 +652,6 @@ cmd_link() {
 print_link_tables() {
     local name=$1
     
-    print_header "Overview"
-    printf "  %-25s %-20s %-20s\n" "Profile" "$PROFILE_NAME" "-"
-    echo
-    
-    print_header "IP Link Settings"
     local mtu min_mtu max_mtu txq num_tx num_rx gso_max_size gso_max_segs gro_max_size tso_max_size tso_max_segs qdisc group
     
     mtu=$(read_file "/sys/class/net/$name/mtu")
@@ -660,56 +666,63 @@ print_link_tables() {
     tso_max_size=$(read_file "/sys/class/net/$name/tso_max_size")
     tso_max_segs=$(read_file "/sys/class/net/$name/tso_max_segs")
     
-    # Get qdisc from ip link (if available)
     qdisc=$(ip -o link show "$name" 2>/dev/null | grep -oP 'qdisc \K\S+' || echo "-")
     group=$(ip -o link show "$name" 2>/dev/null | grep -oP 'group \K\S+' || echo "0")
     
-    printf "  %-25s %-20s %-20s\n" "mtu" "$(format_size "${mtu:-0}")" "$(format_size "$MTU")"
-    printf "  %-25s %-20s %-20s\n" "min_mtu" "$(format_size "${min_mtu:-0}")" "-"
-    printf "  %-25s %-20s %-20s\n" "max_mtu" "$(format_size "${max_mtu:-0}")" "-"
-    printf "  %-25s %-20s %-20s\n" "txqueuelen" "${txq:-"-"}" "$TXQUEUELEN"
-    printf "  %-25s %-20s %-20s\n" "num_tx_queues" "${num_tx:-"-"}" "-"
-    printf "  %-25s %-20s %-20s\n" "num_rx_queues" "${num_rx:-"-"}" "-"
-    printf "  %-25s %-20s %-20s\n" "gso_max_size" "$(format_size "${gso_max_size:-0}")" "$(format_size "$GSO_MAX_SIZE")"
-    printf "  %-25s %-20s %-20s\n" "gso_max_segs" "${gso_max_segs:-"-"}" "$GSO_MAX_SEGS"
-    printf "  %-25s %-20s %-20s\n" "gro_max_size" "$(format_size "${gro_max_size:-0}")" "$(format_size "$GRO_MAX_SIZE")"
-    printf "  %-25s %-20s %-20s\n" "tso_max_size" "$(format_size "${tso_max_size:-0}")" "$(format_size "$TSO_MAX_SIZE")"
-    printf "  %-25s %-20s %-20s\n" "tso_max_segs" "${tso_max_segs:-"-"}" "$TSO_MAX_SEGS"
-    printf "  %-25s %-20s %-20s\n" "qdisc" "${qdisc:-"-"}" "-"
-    printf "  %-25s %-20s %-20s\n" "group" "${group:-"-"}" "0"
-    echo
+    local ring_rx ring_rx_max ring_tx ring_tx_max coalesce_rx coalesce_tx offload_tso offload_gso offload_gro
+    local ethtool_available=false
     
-    print_header "Ethtool Settings"
     if command -v ethtool &>/dev/null; then
-        local ring_rx ring_rx_max ring_tx ring_tx_max coalesce_rx coalesce_tx offload_tso offload_gso offload_gro
-        
-        # Ring buffer settings
+        ethtool_available=true
         ring_rx=$(ethtool -g "$name" 2>/dev/null | grep -A4 "Current hardware" | grep "RX:" | awk '{print $2}' || echo "-")
         ring_rx_max=$(ethtool -g "$name" 2>/dev/null | grep -A4 "Pre-set maximums" | grep "RX:" | awk '{print $2}' || echo "-")
         ring_tx=$(ethtool -g "$name" 2>/dev/null | grep -A4 "Current hardware" | grep "TX:" | awk '{print $2}' || echo "-")
         ring_tx_max=$(ethtool -g "$name" 2>/dev/null | grep -A4 "Pre-set maximums" | grep "TX:" | awk '{print $2}' || echo "-")
         
-        # Coalesce settings
         coalesce_rx=$(ethtool -c "$name" 2>/dev/null | grep "rx-usecs:" | awk '{print $2}' || echo "-")
         coalesce_tx=$(ethtool -c "$name" 2>/dev/null | grep "tx-usecs:" | awk '{print $2}' || echo "-")
         
-        # Offload settings
         offload_tso=$(ethtool -k "$name" 2>/dev/null | grep "tcp-segmentation-offload:" | awk '{print $2}' || echo "-")
         offload_gso=$(ethtool -k "$name" 2>/dev/null | grep "generic-segmentation-offload:" | awk '{print $2}' || echo "-")
         offload_gro=$(ethtool -k "$name" 2>/dev/null | grep "generic-receive-offload:" | awk '{print $2}' || echo "-")
-        
-        printf "  %-25s %-20s %-20s\n" "ring_rx" "${ring_rx:-"-"}" "$RING_RX"
-        printf "  %-25s %-20s %-20s\n" "ring_rx_max" "${ring_rx_max:-"-"}" "-"
-        printf "  %-25s %-20s %-20s\n" "ring_tx" "${ring_tx:-"-"}" "$RING_TX"
-        printf "  %-25s %-20s %-20s\n" "ring_tx_max" "${ring_tx_max:-"-"}" "-"
-        printf "  %-25s %-20s %-20s\n" "coalesce_rx_usecs" "${coalesce_rx:-"-"}" "$COALESCE_RX_USECS"
-        printf "  %-25s %-20s %-20s\n" "coalesce_tx_usecs" "${coalesce_tx:-"-"}" "$COALESCE_TX_USECS"
-        printf "  %-25s %-20s %-20s\n" "offload_tso" "${offload_tso:-"-"}" "$OFFLOAD_TSO"
-        printf "  %-25s %-20s %-20s\n" "offload_gso" "${offload_gso:-"-"}" "$OFFLOAD_GSO"
-        printf "  %-25s %-20s %-20s\n" "offload_gro" "${offload_gro:-"-"}" "$OFFLOAD_GRO"
-    else
-        printf "  %-25s\n" "(ethtool unavailable)"
     fi
+    
+    {
+        echo -e "${CYAN}Overview:${NC}\t\t"
+        echo -e "  Profile\t$PROFILE_NAME\t-"
+        
+        echo -e "\t\t"
+        echo -e "${CYAN}IP Link Settings:${NC}\t\t"
+        echo -e "  mtu\t$(format_size "${mtu:-0}")\t$(format_size "$MTU")"
+        echo -e "  min_mtu\t$(format_size "${min_mtu:-0}")\t-"
+        echo -e "  max_mtu\t$(format_size "${max_mtu:-0}")\t-"
+        echo -e "  txqueuelen\t${txq:-"-"}\t$TXQUEUELEN"
+        echo -e "  num_tx_queues\t${num_tx:-"-"}\t-"
+        echo -e "  num_rx_queues\t${num_rx:-"-"}\t-"
+        echo -e "  gso_max_size\t$(format_size "${gso_max_size:-0}")\t$(format_size "$GSO_MAX_SIZE")"
+        echo -e "  gso_max_segs\t${gso_max_segs:-"-"}\t$GSO_MAX_SEGS"
+        echo -e "  gro_max_size\t$(format_size "${gro_max_size:-0}")\t$(format_size "$GRO_MAX_SIZE")"
+        echo -e "  tso_max_size\t$(format_size "${tso_max_size:-0}")\t$(format_size "$TSO_MAX_SIZE")"
+        echo -e "  tso_max_segs\t${tso_max_segs:-"-"}\t$TSO_MAX_SEGS"
+        echo -e "  qdisc\t${qdisc:-"-"}\t-"
+        echo -e "  group\t${group:-"-"}\t0"
+        
+        echo -e "\t\t"
+        echo -e "${CYAN}Ethtool Settings:${NC}\t\t"
+        if [[ "$ethtool_available" == true ]]; then
+            echo -e "  ring_rx\t${ring_rx:-"-"}\t$RING_RX"
+            echo -e "  ring_rx_max\t${ring_rx_max:-"-"}\t-"
+            echo -e "  ring_tx\t${ring_tx:-"-"}\t$RING_TX"
+            echo -e "  ring_tx_max\t${ring_tx_max:-"-"}\t-"
+            echo -e "  coalesce_rx_usecs\t${coalesce_rx:-"-"}\t$COALESCE_RX_USECS"
+            echo -e "  coalesce_tx_usecs\t${coalesce_tx:-"-"}\t$COALESCE_TX_USECS"
+            echo -e "  offload_tso\t${offload_tso:-"-"}\t$OFFLOAD_TSO"
+            echo -e "  offload_gso\t${offload_gso:-"-"}\t$OFFLOAD_GSO"
+            echo -e "  offload_gro\t${offload_gro:-"-"}\t$OFFLOAD_GRO"
+        else
+            echo -e "  (ethtool unavailable)\t\t"
+        fi
+    } | print_table
 }
 
 generate_link_output() {
@@ -806,55 +819,53 @@ cmd_route() {
     [[ "$ipv6_only" == true ]] && show_ipv4=false
     [[ "$ipv4_only" == true ]] && show_ipv6=false
     
-    printf "%-6s %-25s %-20s %-12s %-8s %-10s %-10s %-10s\n" \
-        "Family" "Destination" "Gateway" "Interface" "Metric" "Protocol" "Scope" "Type"
-    printf "%s\n" "$(printf '=%.0s' {1..110})"
-    
     local found=false
     
-    if [[ "$show_ipv4" == true ]]; then
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            found=true
-            local dest gateway iface metric proto scope rtype
-            
-            dest=$(echo "$line" | awk '{print $1}')
-            [[ "$dest" == "default" ]] && dest="0.0.0.0/0"
-            
-            gateway=$(echo "$line" | grep -oP 'via \K\S+' || echo "-")
-            iface=$(echo "$line" | grep -oP 'dev \K\S+' || echo "-")
-            metric=$(echo "$line" | grep -oP 'metric \K\S+' || echo "-")
-            proto=$(echo "$line" | grep -oP 'proto \K\S+' || echo "unspec")
-            scope=$(echo "$line" | grep -oP 'scope \K\S+' || echo "global")
-            rtype=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="type") print $(i+1)}')
-            [[ -z "$rtype" ]] && rtype="unicast"
-            
-            printf "%-6s %-25s %-20s %-12s %-8s %-10s %-10s %-10s\n" \
-                "IPv4" "$dest" "$gateway" "$iface" "$metric" "$proto" "$scope" "$rtype"
-        done < <(ip -4 route show 2>/dev/null || true)
-    fi
-    
-    if [[ "$show_ipv6" == true ]]; then
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            found=true
-            local dest gateway iface metric proto scope rtype
-            
-            dest=$(echo "$line" | awk '{print $1}')
-            [[ "$dest" == "default" ]] && dest="::/0"
-            
-            gateway=$(echo "$line" | grep -oP 'via \K\S+' || echo "-")
-            iface=$(echo "$line" | grep -oP 'dev \K\S+' || echo "-")
-            metric=$(echo "$line" | grep -oP 'metric \K\S+' || echo "-")
-            proto=$(echo "$line" | grep -oP 'proto \K\S+' || echo "unspec")
-            scope=$(echo "$line" | grep -oP 'scope \K\S+' || echo "global")
-            rtype=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="type") print $(i+1)}')
-            [[ -z "$rtype" ]] && rtype="unicast"
-            
-            printf "%-6s %-25s %-20s %-12s %-8s %-10s %-10s %-10s\n" \
-                "IPv6" "$dest" "$gateway" "$iface" "$metric" "$proto" "$scope" "$rtype"
-        done < <(ip -6 route show 2>/dev/null || true)
-    fi
+    {
+        echo -e "Family\tDestination\tGateway\tInterface\tMetric\tProtocol\tScope\tType"
+        
+        if [[ "$show_ipv4" == true ]]; then
+            while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                found=true
+                local dest gateway iface metric proto scope rtype
+                
+                dest=$(echo "$line" | awk '{print $1}')
+                [[ "$dest" == "default" ]] && dest="0.0.0.0/0"
+                
+                gateway=$(echo "$line" | grep -oP 'via \K\S+' || echo "-")
+                iface=$(echo "$line" | grep -oP 'dev \K\S+' || echo "-")
+                metric=$(echo "$line" | grep -oP 'metric \K\S+' || echo "-")
+                proto=$(echo "$line" | grep -oP 'proto \K\S+' || echo "unspec")
+                scope=$(echo "$line" | grep -oP 'scope \K\S+' || echo "global")
+                rtype=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="type") print $(i+1)}')
+                [[ -z "$rtype" ]] && rtype="unicast"
+                
+                echo -e "IPv4\t$dest\t$gateway\t$iface\t$metric\t$proto\t$scope\t$rtype"
+            done < <(ip -4 route show 2>/dev/null || true)
+        fi
+        
+        if [[ "$show_ipv6" == true ]]; then
+            while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                found=true
+                local dest gateway iface metric proto scope rtype
+                
+                dest=$(echo "$line" | awk '{print $1}')
+                [[ "$dest" == "default" ]] && dest="::/0"
+                
+                gateway=$(echo "$line" | grep -oP 'via \K\S+' || echo "-")
+                iface=$(echo "$line" | grep -oP 'dev \K\S+' || echo "-")
+                metric=$(echo "$line" | grep -oP 'metric \K\S+' || echo "-")
+                proto=$(echo "$line" | grep -oP 'proto \K\S+' || echo "unspec")
+                scope=$(echo "$line" | grep -oP 'scope \K\S+' || echo "global")
+                rtype=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="type") print $(i+1)}')
+                [[ -z "$rtype" ]] && rtype="unicast"
+                
+                echo -e "IPv6\t$dest\t$gateway\t$iface\t$metric\t$proto\t$scope\t$rtype"
+            done < <(ip -6 route show 2>/dev/null || true)
+        fi
+    } | print_table
     
     [[ "$found" == false ]] && echo "No routes found"
 }
@@ -864,77 +875,147 @@ cmd_route() {
 # ============================================================================
 
 cmd_nat() {
-    # Check if iptables is available
-    if ! command -v iptables &>/dev/null; then
-        print_error "iptables not found"
+    if ! command -v nft &>/dev/null; then
+        print_error "nft not found (nftables required)"
         return 1
     fi
     
-    local has_rules=false
+    if ! command -v jq &>/dev/null; then
+        print_error "jq not found (required for JSON parsing)"
+        return 1
+    fi
     
-    printf "%-15s %-12s %-8s %-18s %-18s %-8s %-8s %-20s %-10s %-10s\n" \
-        "Chain" "Type" "Protocol" "Source" "Destination" "In" "Out" "Target" "Packets" "Bytes"
-    printf "%s\n" "$(printf '=%.0s' {1..140})"
+    local json_output
+    json_output=$(nft -j list ruleset 2>/dev/null)
     
-    # Parse iptables nat table with verbose output
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        [[ "$line" =~ ^Chain ]] && continue
-        [[ "$line" =~ ^pkts ]] && continue
-        [[ "$line" =~ ^$ ]] && continue
-        
-        local chain nat_type proto src dest in_if out_if target packets bytes extra
-        
-        # Parse the line - iptables -L -n -v format:
-        # pkts bytes target prot opt in out source destination [extra]
-        read -r packets bytes target proto _ in_if out_if src dest extra <<< "$line"
-        
-        # Skip non-NAT rules
-        case "$target" in
-            SNAT|DNAT|MASQUERADE) ;;
-            *) continue ;;
-        esac
-        
-        has_rules=true
-        
-        # Determine chain from context (we'll parse chain headers)
-        chain="${current_chain:-UNKNOWN}"
-        
-        # Determine NAT type
-        nat_type="$target"
-        
-        # Format source/destination with port if present
-        local src_port dest_port to_target
-        src_port=$(echo "$extra" | grep -oP 'spt:\K\d+' || echo "")
-        dest_port=$(echo "$extra" | grep -oP 'dpt:\K\d+' || echo "")
-        to_target=$(echo "$extra" | grep -oP 'to:\K\S+' || echo "-")
-        
-        [[ -n "$src_port" ]] && src="$src:$src_port"
-        [[ -n "$dest_port" ]] && dest="$dest:$dest_port"
-        [[ "$src" == "0.0.0.0/0" ]] && src="*"
-        [[ "$dest" == "0.0.0.0/0" ]] && dest="*"
-        [[ "$in_if" == "*" ]] && in_if="*"
-        [[ "$out_if" == "*" ]] && out_if="*"
-        [[ "$proto" == "all" || "$proto" == "0" ]] && proto="all"
-        
-        # Format target with to: info
-        local target_str="$to_target"
-        [[ "$nat_type" == "MASQUERADE" ]] && target_str="-"
-        
-        printf "%-15s %-12s %-8s %-18s %-18s %-8s %-8s %-20s %-10s %-10s\n" \
-            "$chain" "$nat_type" "$proto" "$src" "$dest" "$in_if" "$out_if" "$target_str" \
-            "$(format_count "$packets")" "$(format_bytes_human "$bytes")"
-    done < <(
-        for chain in PREROUTING INPUT OUTPUT POSTROUTING; do
-            echo "Chain $chain"
-            iptables -t nat -L "$chain" -n -v 2>/dev/null | tail -n +3 | while read -r line; do
-                current_chain="$chain"
-                echo "$line"
-            done
-        done
-    )
+    if [[ -z "$json_output" ]]; then
+        echo "No NAT rules found"
+        return 0
+    fi
     
-    [[ "$has_rules" == false ]] && echo "No NAT rules found (SNAT/DNAT/MASQUERADE)"
+    local rules_json
+    rules_json=$(echo "$json_output" | jq -c '
+        .nftables[]
+        | select(.rule != null)
+        | .rule
+        | select(.table == "nat" or (.expr[]? | (has("masquerade") or has("snat") or has("dnat") or has("redirect"))))
+    ' 2>/dev/null)
+    
+    if [[ -z "$rules_json" ]]; then
+        echo "No NAT rules found"
+        return 0
+    fi
+    
+    print_header "NAT Rules"
+    {
+        echo -e "  Chain\tType\tProto\tSource\tDestination\tIn\tOut\tTarget\tPackets\tBytes"
+        
+        while IFS= read -r rule; do
+            [[ -z "$rule" ]] && continue
+            
+            local chain nat_type proto src dest in_if out_if target packets bytes
+            
+            chain=$(echo "$rule" | jq -r '.chain // "-"')
+            
+            nat_type=$(echo "$rule" | jq -r '
+                .expr[]
+                | if has("masquerade") then "MASQUERADE"
+                  elif has("snat") then "SNAT"
+                  elif has("dnat") then "DNAT"
+                  elif has("redirect") then "REDIRECT"
+                  else empty
+                  end
+            ' 2>/dev/null | head -1)
+            [[ -z "$nat_type" ]] && nat_type="-"
+            
+            target=$(echo "$rule" | jq -r '
+                .expr[]
+                | if has("snat") then
+                    .snat | [.addr // empty, .port // empty] | map(tostring) | join(":")
+                  elif has("dnat") then
+                    .dnat | [.addr // empty, .port // empty] | map(tostring) | join(":")
+                  elif has("redirect") then
+                    .redirect | .port // "-"
+                  elif has("masquerade") then
+                    .masquerade | if .port then (.port | if type == "object" and has("range") then "\(.range[0])-\(.range[1])" else tostring end) else "-" end
+                  else empty
+                  end
+            ' 2>/dev/null | head -1)
+            [[ -z "$target" || "$target" == ":" ]] && target="-"
+            
+            proto=$(echo "$rule" | jq -r '
+                .expr[]
+                | select(has("match"))
+                | .match
+                | select(.left.meta.key == "l4proto" or .left.payload.protocol != null)
+                | if .left.meta.key == "l4proto" then .right
+                  elif .left.payload.protocol then .left.payload.protocol
+                  else empty
+                  end
+            ' 2>/dev/null | head -1)
+            [[ -z "$proto" ]] && proto="all"
+            
+            src=$(echo "$rule" | jq -r '
+                .expr[]
+                | select(has("match"))
+                | .match
+                | select(.left.payload.field == "saddr" or .left.payload.field == "sport")
+                | if .right | type == "object" and has("prefix") then
+                    "\(.right.prefix.addr)/\(.right.prefix.len)"
+                  else
+                    .right | tostring
+                  end
+            ' 2>/dev/null | tr '\n' ':' | sed 's/:$//')
+            [[ -z "$src" ]] && src="*"
+            
+            dest=$(echo "$rule" | jq -r '
+                .expr[]
+                | select(has("match"))
+                | .match
+                | select(.left.payload.field == "daddr" or .left.payload.field == "dport")
+                | if .right | type == "object" and has("prefix") then
+                    "\(.right.prefix.addr)/\(.right.prefix.len)"
+                  else
+                    .right | tostring
+                  end
+            ' 2>/dev/null | tr '\n' ':' | sed 's/:$//')
+            [[ -z "$dest" ]] && dest="*"
+            
+            in_if=$(echo "$rule" | jq -r '
+                .expr[]
+                | select(has("match"))
+                | .match
+                | select(.left.meta.key == "iifname" or .left.meta.key == "iif")
+                | .right
+            ' 2>/dev/null | head -1)
+            [[ -z "$in_if" ]] && in_if="*"
+            
+            out_if=$(echo "$rule" | jq -r '
+                .expr[]
+                | select(has("match"))
+                | .match
+                | select(.left.meta.key == "oifname" or .left.meta.key == "oif")
+                | .right
+            ' 2>/dev/null | head -1)
+            [[ -z "$out_if" ]] && out_if="*"
+            
+            packets=$(echo "$rule" | jq -r '
+                .expr[]
+                | select(has("counter"))
+                | .counter.packets // 0
+            ' 2>/dev/null | head -1)
+            [[ -z "$packets" ]] && packets="0"
+            
+            bytes=$(echo "$rule" | jq -r '
+                .expr[]
+                | select(has("counter"))
+                | .counter.bytes // 0
+            ' 2>/dev/null | head -1)
+            [[ -z "$bytes" ]] && bytes="0"
+            
+            echo -e "  $chain\t$nat_type\t$proto\t$src\t$dest\t$in_if\t$out_if\t$target\t$(format_count "$packets")\t$(format_bytes_human "$bytes")"
+        done <<< "$rules_json"
+    } | print_table_with_header
 }
 
 # ============================================================================
