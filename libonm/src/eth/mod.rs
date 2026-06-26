@@ -681,113 +681,284 @@ fn get_interface_name_by_index(index: u32) -> Option<String> {
     None
 }
 
+/// Get NAT rules from nftables using JSON API.
+/// 
+/// This function queries nftables via `nft -j list ruleset` and parses the JSON output
+/// to extract NAT rules (SNAT, DNAT, MASQUERADE). This approach is more robust than
+/// parsing iptables text output as the JSON format is stable and well-defined.
 pub fn get_nat_rules() -> Result<NatTable, EthError> {
     use std::process::Command;
 
     let mut table = NatTable::default();
 
-    let output = Command::new("iptables")
-        .args(["-t", "nat", "-L", "-n", "-v"])
+    // Try nftables first (preferred)
+    let output = Command::new("nft")
+        .args(["-j", "list", "ruleset"])
         .output();
 
     match output {
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            parse_iptables_nat_output(&stdout, &mut table);
+            if let Err(e) = parse_nftables_json(&stdout, &mut table) {
+                tracing::debug!("Failed to parse nftables JSON: {}", e);
+            }
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             if !stderr.contains("Permission denied") && !stderr.contains("not found") {
-                tracing::debug!("iptables nat query failed: {}", stderr);
+                tracing::debug!("nft command failed: {}", stderr);
             }
         }
         Err(e) => {
-            tracing::debug!("Failed to run iptables: {}", e);
+            tracing::debug!("Failed to run nft: {}", e);
         }
     }
 
     Ok(table)
 }
 
-fn parse_iptables_nat_output(output: &str, table: &mut NatTable) {
-    let mut current_chain = String::new();
+/// Parse nftables JSON output to extract NAT rules.
+/// 
+/// The JSON format follows the libnftables-json schema where rules contain
+/// expressions (expr) that may include NAT statements like snat, dnat, or masquerade.
+fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthError> {
+    use serde_json::Value;
 
-    for line in output.lines() {
-        let line = line.trim();
+    let root: Value = serde_json::from_str(json_str)
+        .map_err(|e| EthError::Internal(format!("Invalid nftables JSON: {}", e)))?;
 
-        if line.starts_with("Chain ") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                current_chain = parts[1].to_string();
+    let nftables = root.get("nftables")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| EthError::Internal("Missing 'nftables' array in JSON".to_string()))?;
+
+    // First pass: collect chain information (for hook/type context)
+    let mut chain_info: std::collections::HashMap<(String, String, String), NftChainInfo> = 
+        std::collections::HashMap::new();
+
+    for item in nftables {
+        if let Some(chain) = item.get("chain") {
+            let family = chain.get("family").and_then(|v| v.as_str()).unwrap_or("");
+            let table_name = chain.get("table").and_then(|v| v.as_str()).unwrap_or("");
+            let chain_name = chain.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let chain_type = chain.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let hook = chain.get("hook").and_then(|v| v.as_str()).unwrap_or("");
+
+            chain_info.insert(
+                (family.to_string(), table_name.to_string(), chain_name.to_string()),
+                NftChainInfo {
+                    chain_type: chain_type.to_string(),
+                    hook: hook.to_string(),
+                }
+            );
+        }
+    }
+
+    // Second pass: extract rules with NAT statements
+    for item in nftables {
+        if let Some(rule) = item.get("rule") {
+            let family = rule.get("family").and_then(|v| v.as_str()).unwrap_or("");
+            let table_name = rule.get("table").and_then(|v| v.as_str()).unwrap_or("");
+            let chain_name = rule.get("chain").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Get chain info to check if this is a NAT chain
+            let info = chain_info.get(&(family.to_string(), table_name.to_string(), chain_name.to_string()));
+            
+            if let Some(exprs) = rule.get("expr").and_then(|v| v.as_array()) {
+                if let Some(nat_rule) = parse_nft_rule_exprs(chain_name, exprs, info) {
+                    table.rules.push(nat_rule);
+                }
             }
-            continue;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct NftChainInfo {
+    chain_type: String,
+    hook: String,
+}
+
+/// Parse nftables rule expressions to extract NAT information.
+fn parse_nft_rule_exprs(chain: &str, exprs: &[serde_json::Value], _chain_info: Option<&NftChainInfo>) -> Option<NatRule> {
+    let mut nat_type: Option<NatType> = None;
+    let mut to_addr: Option<String> = None;
+    let mut to_port: Option<String> = None;
+    let mut protocol: Option<String> = None;
+    let mut source: Option<String> = None;
+    let mut destination: Option<String> = None;
+    let mut dport: Option<String> = None;
+    let mut sport: Option<String> = None;
+    let mut interface_in: Option<String> = None;
+    let mut interface_out: Option<String> = None;
+    let mut packets: u64 = 0;
+    let mut bytes: u64 = 0;
+
+    for expr in exprs {
+        // Check for NAT statements
+        if expr.get("snat").is_some() {
+            nat_type = Some(NatType::Snat);
+            if let Some(snat) = expr.get("snat") {
+                to_addr = extract_nft_addr(snat.get("addr"));
+                to_port = extract_nft_port(snat.get("port"));
+            }
+        } else if expr.get("dnat").is_some() {
+            nat_type = Some(NatType::Dnat);
+            if let Some(dnat) = expr.get("dnat") {
+                to_addr = extract_nft_addr(dnat.get("addr"));
+                to_port = extract_nft_port(dnat.get("port"));
+            }
+        } else if expr.get("masquerade").is_some() {
+            nat_type = Some(NatType::Masquerade);
+            if let Some(masq) = expr.get("masquerade") {
+                to_port = extract_nft_port(masq.get("port"));
+            }
         }
 
-        if line.starts_with("num") || line.starts_with("pkts") || line.is_empty() {
-            continue;
+        // Extract match conditions
+        if let Some(match_expr) = expr.get("match") {
+            parse_nft_match(match_expr, &mut protocol, &mut source, &mut destination, 
+                           &mut dport, &mut sport, &mut interface_in, &mut interface_out);
         }
 
-        if let Some(rule) = parse_nat_rule_line(line, &current_chain) {
-            table.rules.push(rule);
+        // Extract counter values
+        if let Some(counter) = expr.get("counter") {
+            packets = counter.get("packets").and_then(|v| v.as_u64()).unwrap_or(0);
+            bytes = counter.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+        }
+    }
+
+    // Only return if we found a NAT statement
+    let nat_type = nat_type?;
+
+    Some(NatRule {
+        chain: chain.to_string(),
+        nat_type: nat_type.clone(),
+        source,
+        destination,
+        protocol,
+        dport,
+        sport,
+        to_source: if matches!(nat_type, NatType::Snat | NatType::Masquerade) { to_addr.clone() } else { None },
+        to_destination: if matches!(nat_type, NatType::Dnat) { 
+            // Combine address and port for DNAT target
+            match (&to_addr, &to_port) {
+                (Some(addr), Some(port)) => Some(format!("{}:{}", addr, port)),
+                (Some(addr), None) => Some(addr.clone()),
+                (None, Some(port)) => Some(format!(":{}", port)),
+                (None, None) => None,
+            }
+        } else { 
+            None 
+        },
+        interface_in,
+        interface_out,
+        packets,
+        bytes,
+    })
+}
+
+/// Extract address from nftables expression.
+fn extract_nft_addr(val: Option<&serde_json::Value>) -> Option<String> {
+    val.and_then(|v| {
+        // Can be a direct string or a complex expression
+        if let Some(s) = v.as_str() {
+            Some(s.to_string())
+        } else if let Some(obj) = v.as_object() {
+            // Handle prefix notation like {"prefix": {"addr": "10.0.0.0", "len": 24}}
+            if let Some(prefix) = obj.get("prefix") {
+                let addr = prefix.get("addr").and_then(|a| a.as_str()).unwrap_or("");
+                let len = prefix.get("len").and_then(|l| l.as_u64()).unwrap_or(32);
+                Some(format!("{}/{}", addr, len))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    })
+}
+
+/// Extract port from nftables expression.
+fn extract_nft_port(val: Option<&serde_json::Value>) -> Option<String> {
+    val.and_then(|v| {
+        if let Some(n) = v.as_u64() {
+            Some(n.to_string())
+        } else if let Some(s) = v.as_str() {
+            Some(s.to_string())
+        } else if let Some(obj) = v.as_object() {
+            // Handle range notation like {"range": [1024, 65535]}
+            if let Some(range) = obj.get("range").and_then(|r| r.as_array()) {
+                if range.len() == 2 {
+                    let start = range[0].as_u64().unwrap_or(0);
+                    let end = range[1].as_u64().unwrap_or(0);
+                    return Some(format!("{}-{}", start, end));
+                }
+            }
+            None
+        } else {
+            None
+        }
+    })
+}
+
+/// Parse nftables match expression to extract filter conditions.
+fn parse_nft_match(
+    match_expr: &serde_json::Value,
+    protocol: &mut Option<String>,
+    source: &mut Option<String>,
+    destination: &mut Option<String>,
+    dport: &mut Option<String>,
+    sport: &mut Option<String>,
+    interface_in: &mut Option<String>,
+    interface_out: &mut Option<String>,
+) {
+    let left = match_expr.get("left");
+    let right = match_expr.get("right");
+
+    if let (Some(left), Some(right)) = (left, right) {
+        // Check for meta expressions (interface names, protocol)
+        if let Some(meta) = left.get("meta") {
+            let key = meta.get("key").and_then(|k| k.as_str()).unwrap_or("");
+            match key {
+                "iifname" => *interface_in = right.as_str().map(|s| s.to_string()),
+                "oifname" => *interface_out = right.as_str().map(|s| s.to_string()),
+                "l4proto" => *protocol = right.as_str().map(|s| s.to_string())
+                    .or_else(|| right.as_u64().map(|n| proto_num_to_name(n))),
+                _ => {}
+            }
+        }
+
+        // Check for payload expressions (addresses, ports)
+        if let Some(payload) = left.get("payload") {
+            let proto = payload.get("protocol").and_then(|p| p.as_str()).unwrap_or("");
+            let field = payload.get("field").and_then(|f| f.as_str()).unwrap_or("");
+
+            match (proto, field) {
+                ("ip", "saddr") | ("ip6", "saddr") => *source = extract_nft_addr(Some(right)),
+                ("ip", "daddr") | ("ip6", "daddr") => *destination = extract_nft_addr(Some(right)),
+                ("tcp", "dport") | ("udp", "dport") => {
+                    *dport = extract_nft_port(Some(right));
+                    *protocol = Some(proto.to_string());
+                }
+                ("tcp", "sport") | ("udp", "sport") => {
+                    *sport = extract_nft_port(Some(right));
+                    *protocol = Some(proto.to_string());
+                }
+                _ => {}
+            }
         }
     }
 }
 
-fn parse_nat_rule_line(line: &str, chain: &str) -> Option<NatRule> {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 9 {
-        return None;
+/// Convert IP protocol number to name.
+fn proto_num_to_name(num: u64) -> String {
+    match num {
+        6 => "tcp".to_string(),
+        17 => "udp".to_string(),
+        1 => "icmp".to_string(),
+        58 => "icmpv6".to_string(),
+        _ => num.to_string(),
     }
-
-    let packets: u64 = parts[0].replace("K", "000").replace("M", "000000").parse().unwrap_or(0);
-    let bytes: u64 = parts[1].replace("K", "000").replace("M", "000000").parse().unwrap_or(0);
-    let target = parts[2];
-    let protocol = parts[3];
-    let in_iface = parts[5];
-    let out_iface = parts[6];
-    let source = parts[7];
-    let destination = parts[8];
-
-    let nat_type = match target {
-        "SNAT" => NatType::Snat,
-        "DNAT" => NatType::Dnat,
-        "MASQUERADE" => NatType::Masquerade,
-        _ => return None,
-    };
-
-    let mut rule = NatRule {
-        chain: chain.to_string(),
-        nat_type,
-        source: if source != "0.0.0.0/0" { Some(source.to_string()) } else { None },
-        destination: if destination != "0.0.0.0/0" { Some(destination.to_string()) } else { None },
-        protocol: if protocol != "all" && protocol != "0" { Some(protocol.to_string()) } else { None },
-        dport: None,
-        sport: None,
-        to_source: None,
-        to_destination: None,
-        interface_in: if in_iface != "*" { Some(in_iface.to_string()) } else { None },
-        interface_out: if out_iface != "*" { Some(out_iface.to_string()) } else { None },
-        packets,
-        bytes,
-    };
-
-    let remainder = parts[9..].join(" ");
-    if let Some(pos) = remainder.find("to:") {
-        let to_val = remainder[pos + 3..].split_whitespace().next().unwrap_or("");
-        match rule.nat_type {
-            NatType::Snat | NatType::Masquerade => rule.to_source = Some(to_val.to_string()),
-            NatType::Dnat => rule.to_destination = Some(to_val.to_string()),
-        }
-    }
-
-    if let Some(pos) = remainder.find("dpt:") {
-        let dport = remainder[pos + 4..].split_whitespace().next().unwrap_or("");
-        rule.dport = Some(dport.to_string());
-    }
-    if let Some(pos) = remainder.find("spt:") {
-        let sport = remainder[pos + 4..].split_whitespace().next().unwrap_or("");
-        rule.sport = Some(sport.to_string());
-    }
-
-    Some(rule)
 }
