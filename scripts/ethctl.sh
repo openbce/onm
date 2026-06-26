@@ -67,9 +67,13 @@ format_size() {
 format_count() {
     local count=$1
     if [[ $count -ge 1000000 ]]; then
-        printf "%.1fM" "$(echo "scale=1; $count / 1000000" | bc)"
+        local whole=$((count / 1000000))
+        local frac=$(((count % 1000000) * 10 / 1000000))
+        echo "${whole}.${frac}M"
     elif [[ $count -ge 1000 ]]; then
-        printf "%.1fK" "$(echo "scale=1; $count / 1000" | bc)"
+        local whole=$((count / 1000))
+        local frac=$(((count % 1000) * 10 / 1000))
+        echo "${whole}.${frac}K"
     else
         echo "$count"
     fi
@@ -78,11 +82,17 @@ format_count() {
 format_bytes_human() {
     local bytes=$1
     if [[ $bytes -ge 1073741824 ]]; then
-        printf "%.1fG" "$(echo "scale=1; $bytes / 1073741824" | bc)"
+        local whole=$((bytes / 1073741824))
+        local frac=$(((bytes % 1073741824) * 10 / 1073741824))
+        echo "${whole}.${frac}G"
     elif [[ $bytes -ge 1048576 ]]; then
-        printf "%.1fM" "$(echo "scale=1; $bytes / 1048576" | bc)"
+        local whole=$((bytes / 1048576))
+        local frac=$(((bytes % 1048576) * 10 / 1048576))
+        echo "${whole}.${frac}M"
     elif [[ $bytes -ge 1024 ]]; then
-        printf "%.1fK" "$(echo "scale=1; $bytes / 1024" | bc)"
+        local whole=$((bytes / 1024))
+        local frac=$(((bytes % 1024) * 10 / 1024))
+        echo "${whole}.${frac}K"
     else
         echo "$bytes"
     fi
