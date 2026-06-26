@@ -1,14 +1,13 @@
+use std::env;
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rustc-link-lib=pci");
     println!("cargo:rustc-link-lib=ibverbs");
-    println!("cargo:rerun-if-changed=wrappers/*");
-    println!("cargo:rerun-if-env-changed=REGENERATE_BINDINGS");
+    println!("cargo:rerun-if-changed=wrappers/ib.h");
+    println!("cargo:rerun-if-changed=wrappers/pci.h");
 
-    if std::env::var("REGENERATE_BINDINGS").is_err() {
-        return;
-    }
+    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let bindings = bindgen::Builder::default()
         .header("wrappers/ib.h")
@@ -34,12 +33,11 @@ fn main() {
         .generate_comments(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
-        .expect("Unable to generate bindings");
+        .expect("Unable to generate ib bindings");
 
-    let out_path = PathBuf::from("src/hca/wrappers".to_string());
     bindings
         .write_to_file(out_path.join("ib.rs"))
-        .expect("Couldn't write bindings!");
+        .expect("Couldn't write ib bindings!");
 
     let bindings = bindgen::Builder::default()
         .header("wrappers/pci.h")
@@ -49,10 +47,9 @@ fn main() {
         .blocklist_type("u64")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
-        .expect("Unable to generate bindings");
+        .expect("Unable to generate pci bindings");
 
-    let out_path = PathBuf::from("src/hca/wrappers".to_string());
     bindings
         .write_to_file(out_path.join("pci.rs"))
-        .expect("Couldn't write bindings!");
+        .expect("Couldn't write pci bindings!");
 }
