@@ -665,7 +665,7 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) {
             l.tso_max_segs,
             s.tso_max_segs as u32,
         );
-        add_row_str(&mut table, "  qdisc", l.qdisc.clone(), "-");
+        add_row_str(&mut table, "  qdisc", l.qdisc.clone(), "-", BoundType::Min);
         add_row_u32(&mut table, "  group", l.group, 0);
     } else {
         table.add_row(vec!["  (rtnetlink unavailable)", "-", "-"]);
