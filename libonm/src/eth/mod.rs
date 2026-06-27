@@ -134,6 +134,15 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
 
     let interface_type = get_interface_type(path);
 
+    let master = path
+        .join("master")
+        .read_link()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+
+    let kind = read_uevent_value(path, "DEVTYPE")
+        .or_else(|| detect_interface_kind(path, name));
+
     Ok(EthInterface {
         name: name.to_string(),
         mac_address,
@@ -148,13 +157,52 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         pci_slot,
         interface_type,
         addresses: Vec::new(),
+        master,
+        kind,
     })
+}
+
+fn detect_interface_kind(path: &Path, name: &str) -> Option<String> {
+    if path.join("brif").exists() {
+        return Some("bridge".to_string());
+    }
+    if path.join("bonding").exists() {
+        return Some("bond".to_string());
+    }
+    if path.join("brport").exists() {
+        return Some("bridge_slave".to_string());
+    }
+    if path.join("bonding_slave").exists() {
+        return Some("bond_slave".to_string());
+    }
+    if name.starts_with("veth") {
+        return Some("veth".to_string());
+    }
+    if name.starts_with("vxlan") {
+        return Some("vxlan".to_string());
+    }
+    if name.starts_with("cali") {
+        return Some("veth".to_string());
+    }
+    None
 }
 
 fn read_sysfs_file(base: &Path, file: &str) -> Option<String> {
     fs::read_to_string(base.join(file))
         .ok()
         .map(|s| s.trim().to_string())
+}
+
+fn read_uevent_value(path: &Path, key: &str) -> Option<String> {
+    let content = fs::read_to_string(path.join("uevent")).ok()?;
+    for line in content.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            if k == key {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn read_sysctl(key: &str) -> Option<String> {

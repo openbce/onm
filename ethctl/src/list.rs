@@ -8,11 +8,11 @@ pub async fn run() -> Result<(), EthError> {
     table.load_preset(UTF8_FULL);
     table.set_header(vec![
         "Name",
-        "MAC Address",
         "Addresses",
         "MTU",
         "State",
-        "Speed(Mbps)",
+        "Kind",
+        "Master",
         "Driver",
     ]);
 
@@ -28,14 +28,11 @@ pub async fn run() -> Result<(), EthError> {
 
         table.add_row(vec![
             iface.name,
-            iface.mac_address,
             addr_str,
             iface.mtu.to_string(),
             iface.state.to_string(),
-            iface
-                .speed
-                .map(|s| s.to_string())
-                .unwrap_or("-".to_string()),
+            iface.kind.unwrap_or("-".to_string()),
+            iface.master.unwrap_or("-".to_string()),
             iface.driver.unwrap_or("-".to_string()),
         ]);
     }

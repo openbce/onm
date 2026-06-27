@@ -66,6 +66,8 @@ pub struct EthInterface {
     pub pci_slot: Option<String>,
     pub interface_type: InterfaceType,
     pub addresses: Vec<String>,
+    pub master: Option<String>,
+    pub kind: Option<String>,
 }
 
 impl Default for EthInterface {
@@ -84,6 +86,8 @@ impl Default for EthInterface {
             pci_slot: None,
             interface_type: InterfaceType::Virtual,
             addresses: Vec::new(),
+            master: None,
+            kind: None,
         }
     }
 }
