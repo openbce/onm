@@ -38,6 +38,38 @@ pub enum OutputFormat {
     Script,
 }
 
+/// Indicates whether the suggested value is a minimum or maximum bound
+#[derive(Clone, Copy)]
+pub enum BoundType {
+    /// Current value should be >= suggested (e.g., buffer sizes, queue lengths)
+    Min,
+    /// Current value should be <= suggested (e.g., timeouts, retries)
+    Max,
+}
+
+impl BoundType {
+    pub fn prefix(&self) -> &'static str {
+        match self {
+            BoundType::Min => ">= ",
+            BoundType::Max => "<= ",
+        }
+    }
+
+    pub fn is_satisfied(&self, current: Option<u64>, suggested: u64) -> bool {
+        match current {
+            None => false,
+            Some(val) => match self {
+                BoundType::Min => val >= suggested,
+                BoundType::Max => val <= suggested,
+            },
+        }
+    }
+
+    pub fn is_str_satisfied(&self, _current: Option<&str>, _suggested: &str) -> bool {
+        false
+    }
+}
+
 impl OutputFormat {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
@@ -228,8 +260,14 @@ impl SuggestedValues {
     }
 }
 
-pub fn run(profile_str: &str, output: Option<&str>) -> Result<(), EthError> {
+pub fn run(profile_str: &str, output: Option<&str>, backup: Option<&str>) -> Result<(), EthError> {
     let profile = TuningProfile::from_str(profile_str);
+
+    if let Some(fmt) = backup {
+        let format = OutputFormat::from_str(fmt);
+        generate_backup_output(format);
+        return Ok(());
+    }
 
     if let Some(fmt) = output {
         let format = OutputFormat::from_str(fmt);
@@ -333,48 +371,57 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
 }
 
 fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &SuggestedValues) {
+    use BoundType::{Max, Min};
+
     add_section(table, "Connection Tracking");
     add_row(
         table,
         "  nf_conntrack_max",
         sysctl.conntrack.max,
         s.conntrack_max,
+        Min,
     );
     add_row(
         table,
         "  nf_conntrack_buckets",
         sysctl.conntrack.buckets,
         s.conntrack_buckets,
+        Min,
     );
     add_row(
         table,
         "  nf_conntrack_tcp_timeout_established",
         sysctl.conntrack.tcp_timeout_established,
         s.conntrack_tcp_timeout_established,
+        Min,
     );
     add_row(
         table,
         "  nf_conntrack_tcp_timeout_time_wait",
         sysctl.conntrack.tcp_timeout_time_wait,
         s.conntrack_tcp_timeout_time_wait,
+        Max,
     );
     add_row(
         table,
         "  nf_conntrack_tcp_timeout_close_wait",
         sysctl.conntrack.tcp_timeout_close_wait,
         s.conntrack_tcp_timeout_close_wait,
+        Max,
     );
     add_row(
         table,
         "  nf_conntrack_tcp_timeout_fin_wait",
         sysctl.conntrack.tcp_timeout_fin_wait,
         s.conntrack_tcp_timeout_fin_wait,
+        Max,
     );
     add_row(
         table,
         "  nf_conntrack_tcp_max_retrans",
         sysctl.conntrack.tcp_max_retrans,
         s.conntrack_tcp_max_retrans,
+        Max,
     );
 
     add_section(table, "Socket Buffers");
@@ -383,60 +430,70 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         "  net.core.rmem_max",
         sysctl.socket_buffer.rmem_max,
         s.rmem_max,
+        Min,
     );
     add_row_bytes(
         table,
         "  net.core.wmem_max",
         sysctl.socket_buffer.wmem_max,
         s.wmem_max,
+        Min,
     );
     add_row_bytes(
         table,
         "  net.core.rmem_default",
         sysctl.socket_buffer.rmem_default,
         s.rmem_default,
+        Min,
     );
     add_row_bytes(
         table,
         "  net.core.wmem_default",
         sysctl.socket_buffer.wmem_default,
         s.wmem_default,
+        Min,
     );
     add_row_tcp_mem(
         table,
         "  net.ipv4.tcp_rmem",
         sysctl.socket_buffer.tcp_rmem.clone(),
         s.tcp_rmem,
+        Min,
     );
     add_row_tcp_mem(
         table,
         "  net.ipv4.tcp_wmem",
         sysctl.socket_buffer.tcp_wmem.clone(),
         s.tcp_wmem,
+        Min,
     );
     add_row(
         table,
         "  net.core.netdev_max_backlog",
         sysctl.socket_buffer.netdev_max_backlog,
         s.netdev_max_backlog,
+        Min,
     );
     add_row_bytes(
         table,
         "  net.ipv4.udp_rmem_min",
         sysctl.udp.rmem_min,
         s.udp_rmem_min,
+        Min,
     );
     add_row_bytes(
         table,
         "  net.ipv4.udp_wmem_min",
         sysctl.udp.wmem_min,
         s.udp_wmem_min,
+        Min,
     );
     add_row_tcp_mem(
         table,
         "  net.ipv4.udp_mem",
         sysctl.udp.udp_mem.clone(),
         s.udp_mem,
+        Min,
     );
 
     add_section(table, "TCP Settings");
@@ -445,48 +502,56 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         "  net.core.somaxconn",
         sysctl.tcp.somaxconn,
         s.somaxconn,
+        Min,
     );
     add_row(
         table,
         "  net.ipv4.tcp_max_syn_backlog",
         sysctl.tcp.max_syn_backlog,
         s.tcp_max_syn_backlog,
+        Min,
     );
     add_row(
         table,
         "  net.ipv4.tcp_tw_reuse",
         sysctl.tcp.tw_reuse,
         s.tcp_tw_reuse,
+        Min,
     );
     add_row(
         table,
         "  net.ipv4.tcp_fin_timeout",
         sysctl.tcp.fin_timeout,
         s.tcp_fin_timeout,
+        Max,
     );
     add_row(
         table,
         "  net.ipv4.tcp_keepalive_time",
         sysctl.tcp.keepalive_time,
         s.tcp_keepalive_time,
+        Max,
     );
     add_row(
         table,
         "  net.ipv4.tcp_keepalive_probes",
         sysctl.tcp.keepalive_probes,
         s.tcp_keepalive_probes,
+        Max,
     );
     add_row(
         table,
         "  net.ipv4.tcp_keepalive_intvl",
         sysctl.tcp.keepalive_intvl,
         s.tcp_keepalive_intvl,
+        Max,
     );
     add_row_str(
         table,
         "  net.ipv4.ip_local_port_range",
         sysctl.tcp.ip_local_port_range.clone(),
         s.ip_local_port_range,
+        Min,
     );
 
     add_section(table, "ARP / Neighbor Table");
@@ -495,30 +560,35 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         "  net.ipv4.neigh.default.gc_thresh1",
         sysctl.arp.gc_thresh1,
         s.arp_gc_thresh1,
+        Min,
     );
     add_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh2",
         sysctl.arp.gc_thresh2,
         s.arp_gc_thresh2,
+        Min,
     );
     add_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh3",
         sysctl.arp.gc_thresh3,
         s.arp_gc_thresh3,
+        Min,
     );
     add_row(
         table,
         "  net.ipv4.conf.all.arp_ignore",
         sysctl.arp.arp_ignore,
         s.arp_ignore,
+        Min,
     );
     add_row(
         table,
         "  net.ipv4.conf.all.arp_announce",
         sysctl.arp.arp_announce,
         s.arp_announce,
+        Min,
     );
 
     add_section(table, "Reverse Path Filtering");
@@ -527,12 +597,14 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         "  net.ipv4.conf.all.rp_filter",
         sysctl.rp_filter.all,
         s.rp_filter,
+        Max,
     );
     add_row(
         table,
         "  net.ipv4.conf.default.rp_filter",
         sysctl.rp_filter.default,
         s.rp_filter,
+        Max,
     );
 }
 
@@ -704,123 +776,189 @@ fn add_row_bool(table: &mut Table, name: &str, value: Option<bool>, suggested: b
     ]);
 }
 
-fn add_row(table: &mut Table, name: &str, value: Option<u64>, suggested: u64) {
+fn add_row(table: &mut Table, name: &str, value: Option<u64>, suggested: u64, bound: BoundType) {
+    let suggested_str = if bound.is_satisfied(value, suggested) {
+        "OK".to_string()
+    } else {
+        format!("{}{}", bound.prefix(), suggested)
+    };
     table.add_row(vec![
         name.to_string(),
         value.map(|v| v.to_string()).unwrap_or("-".to_string()),
-        suggested.to_string(),
+        suggested_str,
     ]);
 }
 
-fn add_row_bytes(table: &mut Table, name: &str, value: Option<u64>, suggested: u64) {
+fn add_row_bytes(table: &mut Table, name: &str, value: Option<u64>, suggested: u64, bound: BoundType) {
+    let suggested_str = if bound.is_satisfied(value, suggested) {
+        "OK".to_string()
+    } else {
+        format!("{}{}", bound.prefix(), format_size(suggested))
+    };
     table.add_row(vec![
         name.to_string(),
         value.map(|v| format_size(v)).unwrap_or("-".to_string()),
-        format_size(suggested),
+        suggested_str,
     ]);
 }
 
-fn add_row_str(table: &mut Table, name: &str, value: Option<String>, suggested: &str) {
+fn add_row_str(table: &mut Table, name: &str, value: Option<String>, suggested: &str, bound: BoundType) {
+    let suggested_str = if bound.is_str_satisfied(value.as_deref(), suggested) {
+        "OK".to_string()
+    } else {
+        format!("{}{}", bound.prefix(), suggested)
+    };
     table.add_row(vec![
         name.to_string(),
         value.unwrap_or("-".to_string()),
-        suggested.to_string(),
+        suggested_str,
     ]);
 }
 
-fn add_row_tcp_mem(table: &mut Table, name: &str, value: Option<String>, suggested: &str) {
+fn add_row_tcp_mem(table: &mut Table, name: &str, value: Option<String>, suggested: &str, bound: BoundType) {
+    let suggested_str = if bound.is_str_satisfied(value.as_deref(), suggested) {
+        "OK".to_string()
+    } else {
+        format!("{}{}", bound.prefix(), format_tcp_mem(suggested))
+    };
     table.add_row(vec![
         name.to_string(),
         value.map(|v| format_tcp_mem(&v)).unwrap_or("-".to_string()),
-        format_tcp_mem(suggested),
+        suggested_str,
     ]);
 }
 
-pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
-    let s = SuggestedValues::for_profile(profile);
+pub fn generate_backup_output(format: OutputFormat) {
+    use libonm::eth;
 
-    let settings: Vec<(&str, String)> = vec![
-        (
-            "net.netfilter.nf_conntrack_max",
-            s.conntrack_max.to_string(),
-        ),
-        (
-            "net.netfilter.nf_conntrack_buckets",
-            s.conntrack_buckets.to_string(),
-        ),
-        (
-            "net.netfilter.nf_conntrack_tcp_timeout_established",
-            s.conntrack_tcp_timeout_established.to_string(),
-        ),
-        (
-            "net.netfilter.nf_conntrack_tcp_timeout_time_wait",
-            s.conntrack_tcp_timeout_time_wait.to_string(),
-        ),
-        (
-            "net.netfilter.nf_conntrack_tcp_timeout_close_wait",
-            s.conntrack_tcp_timeout_close_wait.to_string(),
-        ),
-        (
-            "net.netfilter.nf_conntrack_tcp_timeout_fin_wait",
-            s.conntrack_tcp_timeout_fin_wait.to_string(),
-        ),
-        (
-            "net.netfilter.nf_conntrack_tcp_max_retrans",
-            s.conntrack_tcp_max_retrans.to_string(),
-        ),
-        ("net.core.rmem_max", s.rmem_max.to_string()),
-        ("net.core.wmem_max", s.wmem_max.to_string()),
-        ("net.core.rmem_default", s.rmem_default.to_string()),
-        ("net.core.wmem_default", s.wmem_default.to_string()),
-        ("net.ipv4.tcp_rmem", s.tcp_rmem.to_string()),
-        ("net.ipv4.tcp_wmem", s.tcp_wmem.to_string()),
-        (
-            "net.core.netdev_max_backlog",
-            s.netdev_max_backlog.to_string(),
-        ),
-        ("net.core.somaxconn", s.somaxconn.to_string()),
-        (
-            "net.ipv4.tcp_max_syn_backlog",
-            s.tcp_max_syn_backlog.to_string(),
-        ),
-        ("net.ipv4.tcp_tw_reuse", s.tcp_tw_reuse.to_string()),
-        ("net.ipv4.tcp_fin_timeout", s.tcp_fin_timeout.to_string()),
-        (
-            "net.ipv4.tcp_keepalive_time",
-            s.tcp_keepalive_time.to_string(),
-        ),
-        (
-            "net.ipv4.tcp_keepalive_probes",
-            s.tcp_keepalive_probes.to_string(),
-        ),
-        (
-            "net.ipv4.tcp_keepalive_intvl",
-            s.tcp_keepalive_intvl.to_string(),
-        ),
-        (
-            "net.ipv4.ip_local_port_range",
-            s.ip_local_port_range.to_string(),
-        ),
-        ("net.ipv4.udp_rmem_min", s.udp_rmem_min.to_string()),
-        ("net.ipv4.udp_wmem_min", s.udp_wmem_min.to_string()),
-        ("net.ipv4.udp_mem", s.udp_mem.to_string()),
-        (
-            "net.ipv4.neigh.default.gc_thresh1",
-            s.arp_gc_thresh1.to_string(),
-        ),
-        (
-            "net.ipv4.neigh.default.gc_thresh2",
-            s.arp_gc_thresh2.to_string(),
-        ),
-        (
-            "net.ipv4.neigh.default.gc_thresh3",
-            s.arp_gc_thresh3.to_string(),
-        ),
-        ("net.ipv4.conf.all.arp_ignore", s.arp_ignore.to_string()),
-        ("net.ipv4.conf.all.arp_announce", s.arp_announce.to_string()),
-        ("net.ipv4.conf.all.rp_filter", s.rp_filter.to_string()),
-        ("net.ipv4.conf.default.rp_filter", s.rp_filter.to_string()),
+    let sysctl = eth::get_network_sysctl();
+
+    let settings: Vec<(&str, Option<u64>)> = vec![
+        ("net.netfilter.nf_conntrack_max", sysctl.conntrack.max),
+        ("net.netfilter.nf_conntrack_buckets", sysctl.conntrack.buckets),
+        ("net.netfilter.nf_conntrack_tcp_timeout_established", sysctl.conntrack.tcp_timeout_established),
+        ("net.netfilter.nf_conntrack_tcp_timeout_time_wait", sysctl.conntrack.tcp_timeout_time_wait),
+        ("net.netfilter.nf_conntrack_tcp_timeout_close_wait", sysctl.conntrack.tcp_timeout_close_wait),
+        ("net.netfilter.nf_conntrack_tcp_timeout_fin_wait", sysctl.conntrack.tcp_timeout_fin_wait),
+        ("net.netfilter.nf_conntrack_tcp_max_retrans", sysctl.conntrack.tcp_max_retrans),
+        ("net.core.rmem_max", sysctl.socket_buffer.rmem_max),
+        ("net.core.wmem_max", sysctl.socket_buffer.wmem_max),
+        ("net.core.rmem_default", sysctl.socket_buffer.rmem_default),
+        ("net.core.wmem_default", sysctl.socket_buffer.wmem_default),
+        ("net.core.netdev_max_backlog", sysctl.socket_buffer.netdev_max_backlog),
+        ("net.core.somaxconn", sysctl.tcp.somaxconn),
+        ("net.ipv4.tcp_max_syn_backlog", sysctl.tcp.max_syn_backlog),
+        ("net.ipv4.tcp_tw_reuse", sysctl.tcp.tw_reuse),
+        ("net.ipv4.tcp_fin_timeout", sysctl.tcp.fin_timeout),
+        ("net.ipv4.tcp_keepalive_time", sysctl.tcp.keepalive_time),
+        ("net.ipv4.tcp_keepalive_probes", sysctl.tcp.keepalive_probes),
+        ("net.ipv4.tcp_keepalive_intvl", sysctl.tcp.keepalive_intvl),
+        ("net.ipv4.udp_rmem_min", sysctl.udp.rmem_min),
+        ("net.ipv4.udp_wmem_min", sysctl.udp.wmem_min),
+        ("net.ipv4.neigh.default.gc_thresh1", sysctl.arp.gc_thresh1),
+        ("net.ipv4.neigh.default.gc_thresh2", sysctl.arp.gc_thresh2),
+        ("net.ipv4.neigh.default.gc_thresh3", sysctl.arp.gc_thresh3),
+        ("net.ipv4.conf.all.arp_ignore", sysctl.arp.arp_ignore),
+        ("net.ipv4.conf.all.arp_announce", sysctl.arp.arp_announce),
+        ("net.ipv4.conf.all.rp_filter", sysctl.rp_filter.all),
+        ("net.ipv4.conf.default.rp_filter", sysctl.rp_filter.default),
     ];
+
+    let string_settings: Vec<(&str, Option<String>)> = vec![
+        ("net.ipv4.tcp_rmem", sysctl.socket_buffer.tcp_rmem.clone()),
+        ("net.ipv4.tcp_wmem", sysctl.socket_buffer.tcp_wmem.clone()),
+        ("net.ipv4.ip_local_port_range", sysctl.tcp.ip_local_port_range.clone()),
+        ("net.ipv4.udp_mem", sysctl.udp.udp_mem.clone()),
+    ];
+
+    match format {
+        OutputFormat::Cmd => {
+            println!("# Backup of current sysctl values");
+            for (key, value) in &settings {
+                if let Some(v) = value {
+                    println!("sysctl -w {}={}", key, v);
+                }
+            }
+            for (key, value) in &string_settings {
+                if let Some(v) = value {
+                    println!("sysctl -w {}=\"{}\"", key, v);
+                }
+            }
+        }
+        OutputFormat::Conf | OutputFormat::Script => {
+            println!("# Backup of current sysctl values");
+            println!("# Save to restore later with: sysctl --system");
+            println!();
+            for (key, value) in &settings {
+                if let Some(v) = value {
+                    println!("{} = {}", key, v);
+                }
+            }
+            for (key, value) in &string_settings {
+                if let Some(v) = value {
+                    println!("{} = {}", key, v);
+                }
+            }
+        }
+    }
+}
+
+pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
+    use libonm::eth;
+    use BoundType::{Max, Min};
+
+    let s = SuggestedValues::for_profile(profile);
+    let sysctl = eth::get_network_sysctl();
+
+    let settings: Vec<(&str, u64, Option<u64>, BoundType)> = vec![
+        ("net.netfilter.nf_conntrack_max", s.conntrack_max, sysctl.conntrack.max, Min),
+        ("net.netfilter.nf_conntrack_buckets", s.conntrack_buckets, sysctl.conntrack.buckets, Min),
+        ("net.netfilter.nf_conntrack_tcp_timeout_established", s.conntrack_tcp_timeout_established, sysctl.conntrack.tcp_timeout_established, Min),
+        ("net.netfilter.nf_conntrack_tcp_timeout_time_wait", s.conntrack_tcp_timeout_time_wait, sysctl.conntrack.tcp_timeout_time_wait, Max),
+        ("net.netfilter.nf_conntrack_tcp_timeout_close_wait", s.conntrack_tcp_timeout_close_wait, sysctl.conntrack.tcp_timeout_close_wait, Max),
+        ("net.netfilter.nf_conntrack_tcp_timeout_fin_wait", s.conntrack_tcp_timeout_fin_wait, sysctl.conntrack.tcp_timeout_fin_wait, Max),
+        ("net.netfilter.nf_conntrack_tcp_max_retrans", s.conntrack_tcp_max_retrans, sysctl.conntrack.tcp_max_retrans, Max),
+        ("net.core.rmem_max", s.rmem_max, sysctl.socket_buffer.rmem_max, Min),
+        ("net.core.wmem_max", s.wmem_max, sysctl.socket_buffer.wmem_max, Min),
+        ("net.core.rmem_default", s.rmem_default, sysctl.socket_buffer.rmem_default, Min),
+        ("net.core.wmem_default", s.wmem_default, sysctl.socket_buffer.wmem_default, Min),
+        ("net.core.netdev_max_backlog", s.netdev_max_backlog, sysctl.socket_buffer.netdev_max_backlog, Min),
+        ("net.core.somaxconn", s.somaxconn, sysctl.tcp.somaxconn, Min),
+        ("net.ipv4.tcp_max_syn_backlog", s.tcp_max_syn_backlog, sysctl.tcp.max_syn_backlog, Min),
+        ("net.ipv4.tcp_tw_reuse", s.tcp_tw_reuse, sysctl.tcp.tw_reuse, Min),
+        ("net.ipv4.tcp_fin_timeout", s.tcp_fin_timeout, sysctl.tcp.fin_timeout, Max),
+        ("net.ipv4.tcp_keepalive_time", s.tcp_keepalive_time, sysctl.tcp.keepalive_time, Max),
+        ("net.ipv4.tcp_keepalive_probes", s.tcp_keepalive_probes, sysctl.tcp.keepalive_probes, Max),
+        ("net.ipv4.tcp_keepalive_intvl", s.tcp_keepalive_intvl, sysctl.tcp.keepalive_intvl, Max),
+        ("net.ipv4.udp_rmem_min", s.udp_rmem_min, sysctl.udp.rmem_min, Min),
+        ("net.ipv4.udp_wmem_min", s.udp_wmem_min, sysctl.udp.wmem_min, Min),
+        ("net.ipv4.neigh.default.gc_thresh1", s.arp_gc_thresh1, sysctl.arp.gc_thresh1, Min),
+        ("net.ipv4.neigh.default.gc_thresh2", s.arp_gc_thresh2, sysctl.arp.gc_thresh2, Min),
+        ("net.ipv4.neigh.default.gc_thresh3", s.arp_gc_thresh3, sysctl.arp.gc_thresh3, Min),
+        ("net.ipv4.conf.all.arp_ignore", s.arp_ignore, sysctl.arp.arp_ignore, Min),
+        ("net.ipv4.conf.all.arp_announce", s.arp_announce, sysctl.arp.arp_announce, Min),
+        ("net.ipv4.conf.all.rp_filter", s.rp_filter, sysctl.rp_filter.all, Max),
+        ("net.ipv4.conf.default.rp_filter", s.rp_filter, sysctl.rp_filter.default, Max),
+    ];
+
+    let string_settings: Vec<(&str, &str, Option<String>, BoundType)> = vec![
+        ("net.ipv4.tcp_rmem", s.tcp_rmem, sysctl.socket_buffer.tcp_rmem.clone(), Min),
+        ("net.ipv4.tcp_wmem", s.tcp_wmem, sysctl.socket_buffer.tcp_wmem.clone(), Min),
+        ("net.ipv4.ip_local_port_range", s.ip_local_port_range, sysctl.tcp.ip_local_port_range.clone(), Min),
+        ("net.ipv4.udp_mem", s.udp_mem, sysctl.udp.udp_mem.clone(), Min),
+    ];
+
+    let needs_change: Vec<(&str, String)> = settings
+        .iter()
+        .filter(|(_, suggested, current, bound)| !bound.is_satisfied(*current, *suggested))
+        .map(|(key, suggested, _, _)| (*key, suggested.to_string()))
+        .chain(
+            string_settings
+                .iter()
+                .filter(|(_, suggested, current, bound)| !bound.is_str_satisfied(current.as_deref(), suggested))
+                .map(|(key, suggested, _, _)| (*key, suggested.to_string()))
+        )
+        .collect();
 
     let tso = if s.offload_tso { "on" } else { "off" };
     let gso = if s.offload_gso { "on" } else { "off" };
@@ -828,8 +966,12 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
 
     match format {
         OutputFormat::Cmd => {
-            for (key, value) in &settings {
-                println!("sysctl -w {}={}", key, value);
+            if needs_change.is_empty() {
+                println!("# All sysctl settings already meet requirements");
+            } else {
+                for (key, value) in &needs_change {
+                    println!("sysctl -w {}={}", key, value);
+                }
             }
             println!();
             println!("# Interface tuning (ip link)");
@@ -861,8 +1003,12 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             );
             println!("# Save to /etc/sysctl.d/99-k8s-tuning.conf and run: sysctl --system");
             println!();
-            for (key, value) in &settings {
-                println!("{} = {}", key, value);
+            if needs_change.is_empty() {
+                println!("# All sysctl settings already meet requirements");
+            } else {
+                for (key, value) in &needs_change {
+                    println!("{} = {}", key, value);
+                }
             }
             println!();
             println!("# NOTE: Interface settings (not sysctl) - apply via script or systemd unit:");
@@ -889,8 +1035,12 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             println!("set -e");
             println!();
             println!("# Sysctl settings");
-            for (key, value) in &settings {
-                println!("sysctl -w {}={}", key, value);
+            if needs_change.is_empty() {
+                println!("# All sysctl settings already meet requirements");
+            } else {
+                for (key, value) in &needs_change {
+                    println!("sysctl -w {}={}", key, value);
+                }
             }
             println!();
             println!("# Interface tuning (ip link)");

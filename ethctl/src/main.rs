@@ -30,6 +30,9 @@ enum Commands {
         /// Output suggested values as commands: cmd, conf, script
         #[arg(short, long)]
         output: Option<String>,
+        /// Generate backup of current sysctl values: cmd, conf
+        #[arg(short, long)]
+        backup: Option<String>,
     },
     /// Show ip link and ethtool settings with suggested values
     Link {
@@ -70,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::List => list::run().await?,
-        Commands::Info { profile, output } => info::run(&profile, output.as_deref())?,
+        Commands::Info { profile, output, backup } => info::run(&profile, output.as_deref(), backup.as_deref())?,
         Commands::Link {
             name,
             profile,
