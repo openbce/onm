@@ -40,12 +40,16 @@ pub fn run(chain_filter: Option<&str>) -> Result<(), EthError> {
 
     for rule in &rules {
         let target = match &rule.nat_type {
-            libonm::eth::NatType::Snat => {
-                rule.to_source.clone().map(|s| format!("to:{}", s)).unwrap_or("-".to_string())
-            }
-            libonm::eth::NatType::Dnat => {
-                rule.to_destination.clone().map(|s| format!("to:{}", s)).unwrap_or("-".to_string())
-            }
+            libonm::eth::NatType::Snat => rule
+                .to_source
+                .clone()
+                .map(|s| format!("to:{}", s))
+                .unwrap_or("-".to_string()),
+            libonm::eth::NatType::Dnat => rule
+                .to_destination
+                .clone()
+                .map(|s| format!("to:{}", s))
+                .unwrap_or("-".to_string()),
             libonm::eth::NatType::Masquerade => "-".to_string(),
             libonm::eth::NatType::Jump(chain) => chain.clone(),
         };

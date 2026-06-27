@@ -22,7 +22,8 @@ pub fn run() -> Result<(), color_eyre::Report> {
     for hca in hcas {
         println!("----------------------------------------------");
 
-        println!("{:<15}: {}", "ID", hca.subsys_id);
+        println!("{:<15}: {}", "ID", hca.pci_slot_name);
+        println!("{:<15}: {}", "Subsystem ID", hca.subsys_id);
         println!("{:<15}: {}", "Model", hca.model_name);
         println!("{:<15}: {}", "Vendor", hca.vendor_name);
         println!("{:<15}: {}", "FW", hca.fw_ver);

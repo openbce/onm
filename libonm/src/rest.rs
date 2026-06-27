@@ -8,15 +8,22 @@ use serde::Serialize;
 use thiserror::Error;
 use url::Url;
 
-use reqwest::{header::HeaderValue, header::ACCEPT, header::CONTENT_TYPE, Client};
+use reqwest::{
+    header::HeaderValue, header::ACCEPT, header::CONTENT_TYPE, Certificate, Client, Identity,
+};
 
 const REST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct RestClient {
     client: Client,
-    address: String,
-    user: String,
-    password: String,
+    base_url: Url,
+    auth: RestAuth,
+}
+
+enum RestAuth {
+    Basic { user: String, password: String },
+    Bearer(String),
+    None,
 }
 
 pub struct RestConfig {
@@ -80,37 +87,79 @@ impl From<std::io::Error> for RestError {
 
 impl RestClient {
     pub fn new(config: &RestConfig) -> Result<Self, RestError> {
-        let url = Url::parse(&config.address)
-            .map_err(|e| RestError::InvalidConfig(format!("invalid url: {}", e)))?;
-        let host = url
-            .host_str()
-            .ok_or(RestError::InvalidConfig("missing host in url".to_string()))?;
-        let port = url.port().unwrap_or(443);
-        let address = format!("{}:{}", host, port);
+        Self::new_advanced(config, None, None)
+    }
 
-        let client = Client::builder()
+    pub(crate) fn new_advanced(
+        config: &RestConfig,
+        bearer_token: Option<String>,
+        client_identity: Option<(&[u8], &[u8], &[u8])>,
+    ) -> Result<Self, RestError> {
+        let mut base_url = Url::parse(&config.address)
+            .map_err(|e| RestError::InvalidConfig(format!("invalid url: {}", e)))?;
+        if !matches!(base_url.scheme(), "http" | "https") {
+            return Err(RestError::InvalidConfig(format!(
+                "unsupported URL scheme '{}'",
+                base_url.scheme()
+            )));
+        }
+        if base_url.host_str().is_none() {
+            return Err(RestError::InvalidConfig("missing host in url".to_string()));
+        }
+        base_url.set_query(None);
+        base_url.set_fragment(None);
+        if !base_url.path().ends_with('/') {
+            let path = format!("{}/", base_url.path());
+            base_url.set_path(&path);
+        }
+
+        let mut builder = Client::builder()
             .danger_accept_invalid_certs(!config.tls_verify)
-            .timeout(REST_TIMEOUT)
+            .timeout(REST_TIMEOUT);
+
+        if let Some((ca_pem, cert_pem, key_pem)) = client_identity {
+            let ca = Certificate::from_pem(ca_pem)
+                .map_err(|e| RestError::InvalidConfig(format!("invalid CA certificate: {e}")))?;
+            let mut identity_pem = Vec::with_capacity(cert_pem.len() + key_pem.len() + 1);
+            identity_pem.extend_from_slice(cert_pem);
+            identity_pem.push(b'\n');
+            identity_pem.extend_from_slice(key_pem);
+            let identity = Identity::from_pem(&identity_pem)
+                .map_err(|e| RestError::InvalidConfig(format!("invalid client identity: {e}")))?;
+            builder = builder.add_root_certificate(ca).identity(identity);
+        }
+
+        let client = builder
             .build()
             .map_err(|e| RestError::Internal(format!("failed to build HTTP client: {}", e)))?;
 
+        let auth = if let Some(token) = bearer_token {
+            RestAuth::Bearer(token)
+        } else if !config.username.is_empty() || !config.password.is_empty() {
+            RestAuth::Basic {
+                user: config.username.clone(),
+                password: config.password.clone(),
+            }
+        } else {
+            RestAuth::None
+        };
+
         Ok(RestClient {
             client,
-            address,
-            user: config.username.clone(),
-            password: config.password.clone(),
+            base_url,
+            auth,
         })
     }
 
     pub async fn get<'a, T: DeserializeOwned>(&self, path: &str) -> Result<T, RestError> {
         let resp = self.execute_request(Method::GET, path, None).await?;
-        let data = serde_json::from_str(&resp)?;
+        let data = deserialize_response(&resp)?;
         Ok(data)
     }
 
     pub async fn list<'a, T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, RestError> {
         let resp = self.execute_request(Method::GET, path, None).await?;
-        let data = serde_json::from_str(&resp)?;
+        let data = deserialize_response(&resp)?;
         Ok(data)
     }
 
@@ -121,7 +170,7 @@ impl RestClient {
     ) -> Result<T, RestError> {
         let input = serde_json::to_string(o)?;
         let resp = self.execute_request(Method::PUT, path, Some(input)).await?;
-        let data = serde_json::from_str(&resp)?;
+        let data = deserialize_response(&resp)?;
         Ok(data)
     }
 
@@ -134,13 +183,13 @@ impl RestClient {
         let resp = self
             .execute_request(Method::POST, path, Some(input))
             .await?;
-        let data = serde_json::from_str(&resp)?;
+        let data = deserialize_response(&resp)?;
         Ok(data)
     }
 
     pub async fn delete<'a, T: DeserializeOwned>(&self, path: &str) -> Result<T, RestError> {
         let resp = self.execute_request(Method::DELETE, path, None).await?;
-        let data = serde_json::from_str(&resp)?;
+        let data = deserialize_response(&resp)?;
         Ok(data)
     }
 
@@ -154,7 +203,7 @@ impl RestClient {
         let resp = self
             .execute_request(Method::PATCH, path, Some(input))
             .await?;
-        let data = serde_json::from_str(&resp)?;
+        let data = deserialize_response(&resp)?;
         Ok(data)
     }
 
@@ -164,23 +213,26 @@ impl RestClient {
         path: &str,
         data: Option<String>,
     ) -> Result<String, RestError> {
-        let schema = "https";
-        let url = format!("{}://{}/{}", schema, self.address, path.trim_matches('/'));
+        let url = self
+            .base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(|e| RestError::InvalidConfig(format!("invalid request path: {e}")))?;
 
         let body = Bytes::from(data.clone().unwrap_or_default());
-        tracing::debug!(
-            "Method: {method}, URL: {url}, Auth: <{}/***>",
-            self.user,
-        );
+        tracing::debug!("Method: {method}, URL: {url}");
 
-        let req = self
+        let mut req = self
             .client
             .request(method, url.clone())
             .header(ACCEPT, HeaderValue::from_static("application/json"))
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-            .body(body)
-            .basic_auth(&self.user, Some(self.password.clone()))
-            .build()?;
+            .body(body);
+        req = match &self.auth {
+            RestAuth::Basic { user, password } => req.basic_auth(user, Some(password)),
+            RestAuth::Bearer(token) => req.bearer_auth(token),
+            RestAuth::None => req,
+        };
+        let req = req.build()?;
         let resp = self.client.execute(req).await?;
 
         let status = resp.status();
@@ -191,9 +243,40 @@ impl RestClient {
             | StatusCode::CREATED
             | StatusCode::ACCEPTED
             | StatusCode::NO_CONTENT => Ok(body),
-            StatusCode::NOT_FOUND => Err(RestError::NotFound(url)),
+            StatusCode::NOT_FOUND => Err(RestError::NotFound(url.to_string())),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(RestError::AuthFailure(body)),
             _ => Err(RestError::Http(format!("HTTP {}: {}", status, body))),
         }
+    }
+}
+
+fn deserialize_response<T: DeserializeOwned>(body: &str) -> Result<T, RestError> {
+    if body.trim().is_empty() {
+        Ok(serde_json::from_str("null")?)
+    } else {
+        Ok(serde_json::from_str(body)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_response_deserializes_as_unit() {
+        assert_eq!(deserialize_response::<()>("").unwrap(), ());
+    }
+
+    #[test]
+    fn preserves_http_scheme_and_port() {
+        let client = RestClient::new(&RestConfig {
+            address: "http://127.0.0.1:8080".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+            tls_verify: true,
+        })
+        .unwrap();
+
+        assert_eq!(client.base_url.as_str(), "http://127.0.0.1:8080/");
     }
 }

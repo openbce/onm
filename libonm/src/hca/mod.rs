@@ -55,7 +55,9 @@ pub fn list_pci_devices() -> io::Result<Vec<PciDevice>> {
     for device in devices {
         if let Some(parent) = device.parent() {
             let pci_dev = PciDevice::try_from(parent)?;
-            let pci_dev = pci_devs.entry(pci_dev.subsys_id.clone()).or_insert(pci_dev);
+            let pci_dev = pci_devs
+                .entry(pci_dev.pci_slot_name.clone())
+                .or_insert(pci_dev);
 
             let mut ib_dev = IbDevice::try_from(device)?;
             ib_dev.ib_ports = ib_ports
@@ -111,7 +113,10 @@ fn list_ib_ports() -> io::Result<HashMap<String, Vec<IbPort>>> {
             let dev_attr_ptr =
                 alloc::alloc(Layout::new::<ibv_device_attr>()) as *mut ibv_device_attr;
             if dev_attr_ptr.is_null() {
-                return Err(io::Error::new(io::ErrorKind::OutOfMemory, "allocation failed"));
+                return Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "allocation failed",
+                ));
             }
             defer! {
                 alloc::dealloc(dev_attr_ptr as *mut u8, Layout::new::<ibv_device_attr>());
@@ -127,7 +132,10 @@ fn list_ib_ports() -> io::Result<HashMap<String, Vec<IbPort>>> {
                 let port_attr_ptr =
                     alloc::alloc(Layout::new::<ibv_port_attr>()) as *mut ibv_port_attr;
                 if port_attr_ptr.is_null() {
-                    return Err(io::Error::new(io::ErrorKind::OutOfMemory, "allocation failed"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::OutOfMemory,
+                        "allocation failed",
+                    ));
                 }
                 defer! {
                     alloc::dealloc(port_attr_ptr as *mut u8, Layout::new::<ibv_port_attr>());
@@ -139,7 +147,10 @@ fn list_ib_ports() -> io::Result<HashMap<String, Vec<IbPort>>> {
 
                 let gid_ptr = alloc::alloc(Layout::new::<ibv_gid>()) as *mut ibv_gid;
                 if gid_ptr.is_null() {
-                    return Err(io::Error::new(io::ErrorKind::OutOfMemory, "allocation failed"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::OutOfMemory,
+                        "allocation failed",
+                    ));
                 }
                 defer! {
                     alloc::dealloc(gid_ptr as *mut u8, Layout::new::<ibv_gid>());

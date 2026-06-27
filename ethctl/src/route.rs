@@ -2,6 +2,11 @@ use comfy_table::{presets::UTF8_FULL, Table};
 use libonm::eth::{self, EthError};
 
 pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
+    if ipv4_only && ipv6_only {
+        return Err(EthError::InvalidConfig(
+            "--ipv4 and --ipv6 cannot be used together".to_string(),
+        ));
+    }
     let routes = eth::get_routes().await?;
 
     let show_ipv4 = !ipv6_only;
@@ -27,7 +32,10 @@ pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
                 route.destination.clone(),
                 route.gateway.clone().unwrap_or("-".to_string()),
                 route.interface.clone().unwrap_or("-".to_string()),
-                route.metric.map(|m| m.to_string()).unwrap_or("-".to_string()),
+                route
+                    .metric
+                    .map(|m| m.to_string())
+                    .unwrap_or("-".to_string()),
                 route.protocol.to_string(),
                 route.scope.to_string(),
                 route.route_type.to_string(),
@@ -42,7 +50,10 @@ pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
                 route.destination.clone(),
                 route.gateway.clone().unwrap_or("-".to_string()),
                 route.interface.clone().unwrap_or("-".to_string()),
-                route.metric.map(|m| m.to_string()).unwrap_or("-".to_string()),
+                route
+                    .metric
+                    .map(|m| m.to_string())
+                    .unwrap_or("-".to_string()),
                 route.protocol.to_string(),
                 route.scope.to_string(),
                 route.route_type.to_string(),

@@ -171,10 +171,9 @@ async fn main() -> Result<(), UFMError> {
 }
 
 fn load_conf(opt: &Options) -> Result<UFMConfig, UFMError> {
-    let ufm_address = opt
-        .ufm_address
-        .clone()
-        .ok_or_else(|| UFMError::InvalidConfig("UFM_ADDRESS environment or --ufm-address required".to_string()))?;
+    let ufm_address = opt.ufm_address.clone().ok_or_else(|| {
+        UFMError::InvalidConfig("UFM_ADDRESS environment or --ufm-address required".to_string())
+    })?;
 
     let cert = match (&opt.ufm_ca_crt, &opt.ufm_tls_key, &opt.ufm_tls_crt) {
         (Some(ca_crt), Some(tls_key), Some(tls_crt)) => Some(UFMCert {
@@ -182,7 +181,13 @@ fn load_conf(opt: &Options) -> Result<UFMConfig, UFMError> {
             tls_key: tls_key.clone(),
             tls_crt: tls_crt.clone(),
         }),
-        _ => None,
+        (None, None, None) => None,
+        _ => {
+            return Err(UFMError::InvalidConfig(
+                "--ufm-ca-crt, --ufm-tls-key, and --ufm-tls-crt must be provided together"
+                    .to_string(),
+            ))
+        }
     };
 
     Ok(UFMConfig {

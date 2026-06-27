@@ -25,6 +25,11 @@ use super::wrappers::ib::{self, ibv_device, ibv_device_attr};
 
 #[derive(Clone)]
 pub struct PciDevice {
+    /// The domain:bus:device.function address, which uniquely identifies this
+    /// PCI function on the current host.
+    pub pci_slot_name: String,
+    /// The subsystem vendor/device identifier. Multiple physical devices of
+    /// the same model can (and usually do) share this value.
     pub subsys_id: String,
     pub model_name: String,
     pub vendor_name: String,
@@ -38,6 +43,26 @@ impl TryFrom<Device> for PciDevice {
     type Error = io::Error;
     fn try_from(dev: Device) -> Result<Self, Self::Error> {
         Ok(Self {
+            pci_slot_name: dev
+                .property_value("PCI_SLOT_NAME")
+                .and_then(|value| value.to_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    dev.sysname()
+                        .map(|value| value.to_string_lossy().into_owned())
+                })
+                .or_else(|| {
+                    dev.syspath()
+                        .map(|value| value.to_string_lossy().into_owned())
+                })
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "PCI device has no stable identity",
+                    )
+                })?,
             subsys_id: get_property(&dev, "PCI_SUBSYS_ID")?.to_string(),
             model_name: get_property(&dev, "ID_MODEL_FROM_DATABASE")?.to_string(),
             vendor_name: get_property(&dev, "ID_VENDOR_FROM_DATABASE")?.to_string(),
@@ -111,19 +136,27 @@ impl Display for IbPortLinkType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IbPortState {
-    Initializing,
-    Active,
+    Nop,
     Down,
+    Initializing,
+    Armed,
+    Active,
+    ActiveDefer,
+    Unknown(u32),
 }
 
 impl Display for IbPortState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Initializing => write!(f, "Initializing"),
-            Self::Active => write!(f, "Active"),
+            Self::Nop => write!(f, "Nop"),
             Self::Down => write!(f, "Down"),
+            Self::Initializing => write!(f, "Initializing"),
+            Self::Armed => write!(f, "Armed"),
+            Self::Active => write!(f, "Active"),
+            Self::ActiveDefer => write!(f, "ActiveDefer"),
+            Self::Unknown(value) => write!(f, "Unknown({value})"),
         }
     }
 }
@@ -132,31 +165,42 @@ impl TryFrom<u32> for IbPortState {
     type Error = io::Error;
     fn try_from(v: u32) -> io::Result<Self> {
         match v {
-            ib::ibv_port_state::IBV_PORT_INIT => Ok(Self::Initializing),
-            ib::ibv_port_state::IBV_PORT_ACTIVE => Ok(Self::Active),
+            0 => Ok(Self::Nop),
             ib::ibv_port_state::IBV_PORT_DOWN => Ok(Self::Down),
-
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid port state: {}", v),
-            )),
+            ib::ibv_port_state::IBV_PORT_INIT => Ok(Self::Initializing),
+            3 => Ok(Self::Armed),
+            ib::ibv_port_state::IBV_PORT_ACTIVE => Ok(Self::Active),
+            5 => Ok(Self::ActiveDefer),
+            _ => Ok(Self::Unknown(v)),
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IbPortPhysState {
+    Nop,
+    Sleep,
     Polling,
-    LinkUp,
     Disabled,
+    PortConfigurationTraining,
+    LinkUp,
+    LinkErrorRecovery,
+    PhyTest,
+    Unknown(u8),
 }
 
 impl Display for IbPortPhysState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Nop => f.write_str("Nop"),
+            Self::Sleep => f.write_str("Sleep"),
             Self::Polling => f.write_str("Polling"),
-            Self::LinkUp => f.write_str("LinkUp"),
             Self::Disabled => f.write_str("Disabled"),
+            Self::PortConfigurationTraining => f.write_str("PortConfigurationTraining"),
+            Self::LinkUp => f.write_str("LinkUp"),
+            Self::LinkErrorRecovery => f.write_str("LinkErrorRecovery"),
+            Self::PhyTest => f.write_str("PhyTest"),
+            Self::Unknown(value) => write!(f, "Unknown({value})"),
         }
     }
 }
@@ -165,14 +209,15 @@ impl TryFrom<u8> for IbPortPhysState {
     type Error = io::Error;
     fn try_from(v: u8) -> io::Result<Self> {
         match v {
+            0 => Ok(Self::Nop),
+            1 => Ok(Self::Sleep),
             2 => Ok(Self::Polling),
             3 => Ok(Self::Disabled),
+            4 => Ok(Self::PortConfigurationTraining),
             5 => Ok(Self::LinkUp),
-
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid port physical state: {}", v),
-            )),
+            6 => Ok(Self::LinkErrorRecovery),
+            7 => Ok(Self::PhyTest),
+            _ => Ok(Self::Unknown(v)),
         }
     }
 }
@@ -205,5 +250,49 @@ pub struct DeviceAttrPtr(NonNull<ibv_device_attr>);
 impl DeviceAttrPtr {
     pub fn ffi_ptr(&self) -> *mut ibv_device_attr {
         self.0.as_ptr()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IbPortPhysState, IbPortState};
+
+    #[test]
+    fn parses_all_defined_logical_port_states() {
+        let expected = [
+            IbPortState::Nop,
+            IbPortState::Down,
+            IbPortState::Initializing,
+            IbPortState::Armed,
+            IbPortState::Active,
+            IbPortState::ActiveDefer,
+        ];
+
+        for (value, state) in expected.into_iter().enumerate() {
+            assert_eq!(IbPortState::try_from(value as u32).unwrap(), state);
+        }
+        assert_eq!(IbPortState::try_from(99).unwrap(), IbPortState::Unknown(99));
+    }
+
+    #[test]
+    fn parses_all_defined_physical_port_states() {
+        let expected = [
+            IbPortPhysState::Nop,
+            IbPortPhysState::Sleep,
+            IbPortPhysState::Polling,
+            IbPortPhysState::Disabled,
+            IbPortPhysState::PortConfigurationTraining,
+            IbPortPhysState::LinkUp,
+            IbPortPhysState::LinkErrorRecovery,
+            IbPortPhysState::PhyTest,
+        ];
+
+        for (value, state) in expected.into_iter().enumerate() {
+            assert_eq!(IbPortPhysState::try_from(value as u8).unwrap(), state);
+        }
+        assert_eq!(
+            IbPortPhysState::try_from(99).unwrap(),
+            IbPortPhysState::Unknown(99)
+        );
     }
 }

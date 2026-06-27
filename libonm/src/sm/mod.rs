@@ -1,8 +1,8 @@
 use std::collections::HashMap;
+use std::fs;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use url::Url;
 
 use self::types::{Configuration, PhysicalPort, Port};
 use crate::rest::{RestClient, RestConfig, RestError};
@@ -107,7 +107,7 @@ impl TryFrom<String> for PartitionKey {
         let k = i32::from_str_radix(p, base);
 
         match k {
-            Ok(v) => Ok(PartitionKey(v)),
+            Ok(v) => PartitionKey::try_from(v),
             Err(_e) => Err(UFMError::InvalidPKey(pkey.to_string())),
         }
     }
@@ -204,27 +204,45 @@ pub struct UFMConfig {
 }
 
 pub fn connect(conf: UFMConfig) -> Result<Ufm, UFMError> {
-    let addr = Url::parse(&conf.address)
-        .map_err(|_| UFMError::InvalidConfig("invalid UFM url".to_string()))?;
-    let address = addr
-        .host_str()
-        .ok_or(UFMError::InvalidConfig("invalid UFM host".to_string()))?;
+    let username = conf.username.unwrap_or_default();
+    let password = conf.password.unwrap_or_default();
+    if conf.token.is_none() && conf.cert.is_none() && (username.is_empty() || password.is_empty()) {
+        return Err(UFMError::InvalidConfig(
+            "username and password are required when token or client certificate authentication is not configured"
+                .to_string(),
+        ));
+    }
 
-    let password = conf
-        .password
-        .clone()
-        .ok_or(UFMError::InvalidConfig("password is empty".to_string()))?;
-    let username = conf
-        .username
-        .clone()
-        .ok_or(UFMError::InvalidConfig("username is empty".to_string()))?;
+    let cert_data = conf
+        .cert
+        .as_ref()
+        .map(|cert| -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), UFMError> {
+            let read = |path: &str| {
+                fs::read(path).map_err(|e| {
+                    UFMError::InvalidConfig(format!("failed to read certificate {path}: {e}"))
+                })
+            };
+            Ok((
+                read(&cert.ca_crt)?,
+                read(&cert.tls_crt)?,
+                read(&cert.tls_key)?,
+            ))
+        })
+        .transpose()?;
+    let identity = cert_data
+        .as_ref()
+        .map(|(ca, cert, key)| (ca.as_slice(), cert.as_slice(), key.as_slice()));
 
-    let c = RestClient::new(&RestConfig {
-        address: address.to_string(),
-        password,
-        username,
-        tls_verify: true,
-    })?;
+    let c = RestClient::new_advanced(
+        &RestConfig {
+            address: conf.address,
+            password,
+            username,
+            tls_verify: true,
+        },
+        conf.token,
+        identity,
+    )?;
 
     Ok(Ufm { client: c })
 }
@@ -351,7 +369,8 @@ impl Ufm {
     }
 
     pub async fn delete_partition(&self, pkey: &str) -> Result<(), UFMError> {
-        let path = format!("/resources/pkeys/{}", pkey);
+        let pkey = PartitionKey::try_from(pkey)?;
+        let path = format!("/resources/pkeys/{}", pkey.to_string());
         self.client.delete::<()>(&path).await?;
 
         Ok(())
@@ -415,5 +434,17 @@ impl Ufm {
         let v: Version = self.client.get(&path).await?;
 
         Ok(v.ufm_release_version)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_partition_keys_enforce_range() {
+        assert!(PartitionKey::try_from("0x7fff").is_ok());
+        assert!(PartitionKey::try_from("0x8000").is_err());
+        assert!(PartitionKey::try_from("-1").is_err());
     }
 }

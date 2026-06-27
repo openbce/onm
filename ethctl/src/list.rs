@@ -17,9 +17,7 @@ pub async fn run() -> Result<(), EthError> {
     ]);
 
     for iface in interfaces {
-        let addresses = eth::get_interface_addresses(&iface.name)
-            .await
-            .unwrap_or_default();
+        let addresses = eth::get_interface_addresses(&iface.name).await?;
         let addr_str = if addresses.is_empty() {
             "-".to_string()
         } else {

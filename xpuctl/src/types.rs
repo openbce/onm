@@ -30,8 +30,14 @@ fn default_context_tls_verify() -> bool {
 }
 
 impl BMC {
-    pub fn to_libonm_bmc(&self, default_user: &str, default_pass: &str, default_tls_verify: bool) -> libonm::xpu::BMC {
+    pub fn to_libonm_bmc(
+        &self,
+        default_user: &str,
+        default_pass: &str,
+        default_tls_verify: bool,
+    ) -> libonm::xpu::BMC {
         libonm::xpu::BMC {
+            vendor: self.vendor.clone(),
             username: self
                 .username
                 .clone()

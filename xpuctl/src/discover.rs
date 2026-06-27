@@ -9,7 +9,12 @@ struct DiscoverResult {
     status: String,
 }
 
-async fn discover_bmc(bmc: &BMC, username: &str, password: &str, tls_verify: bool) -> DiscoverResult {
+async fn discover_bmc(
+    bmc: &BMC,
+    username: &str,
+    password: &str,
+    tls_verify: bool,
+) -> DiscoverResult {
     let status = match XPU::new(&bmc.to_libonm_bmc(username, password, tls_verify)).await {
         Ok(_) => "Ok".to_string(),
         Err(e) => e.to_string(),
@@ -33,7 +38,10 @@ pub async fn run(cxt: &Context) -> Result<(), XPUError> {
     let results = join_all(futures).await;
 
     for result in results {
-        println!("{:<20}{:<30}{:<50}", result.name, result.address, result.status);
+        println!(
+            "{:<20}{:<30}{:<50}",
+            result.name, result.address, result.status
+        );
     }
 
     Ok(())

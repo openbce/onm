@@ -77,7 +77,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.command {
         Commands::List => list::run().await?,
-        Commands::Info { profile, output, backup } => info::run(&profile, output.as_deref(), backup.as_deref())?,
+        Commands::Info {
+            profile,
+            output,
+            backup,
+        } => info::run(&profile, output.as_deref(), backup.as_deref())?,
         Commands::Link {
             name,
             profile,

@@ -24,23 +24,27 @@ The command line to manage Ethernet interfaces and network sysctl tuning.
 # List interfaces
 ethctl list
 
-# Show interface details and sysctl settings
-ethctl info -n eth0
+# Show interface details and suggested tuning values
+ethctl info
 
-# Show sysctl tuning (default: worker profile)
-ethctl sysctl
+# Show link and ethtool settings
+ethctl link --name eth0
 
 # Show control-plane tuning for 10k-node cluster
-ethctl sysctl --profile control-plane
+ethctl info --profile control-plane
 
 # Generate sysctl commands
-ethctl sysctl -g
+ethctl info --output cmd
 
 # Generate sysctl.conf format
-ethctl sysctl -g conf
+ethctl info --output conf
 
 # Generate tuning script for control-plane
-ethctl sysctl -p control-plane -g script > tune-sysctl.sh
+ethctl info --profile control-plane --output script > tune-network.sh
+
+# Show routes or NAT rules
+ethctl route
+ethctl nat
 ```
 
 ## onm-shell

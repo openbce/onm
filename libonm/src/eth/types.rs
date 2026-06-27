@@ -387,7 +387,7 @@ pub struct RouteTable {
 }
 
 // NAT types (iptables/nftables)
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NatType {
     Snat,
     Dnat,
@@ -406,7 +406,7 @@ impl ToString for NatType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NatRule {
     pub chain: String,
     pub nat_type: NatType,

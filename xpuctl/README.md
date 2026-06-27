@@ -49,3 +49,13 @@ ID                  Status    Vendor         FW        SN             BMC       
 forge02-bf2         Ready     bluefield      -         -              Bf-23.09-6     https://192.168.0.53
 forge02-bf3         Ready     bluefield      -         -              Bf-23.09-6     https://192.168.0.155
 ```
+
+### View
+
+Display one XPU by its zero-based index in the configuration file:
+
+```
+$ xpuctl view --xpu 0
+ID                  Status    Vendor         FW        SN             BMC            Address
+forge02-bf2         Ready     bluefield      -         -              Bf-23.09-6     https://192.168.0.53
+```

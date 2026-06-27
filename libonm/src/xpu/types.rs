@@ -28,6 +28,7 @@ impl From<RedfishError> for XPUError {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BMC {
+    pub vendor: String,
     pub address: String,
     pub username: String,
     pub password: String,
@@ -44,6 +45,7 @@ fn default_tls_verify() -> bool {
 impl std::fmt::Debug for BMC {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BMC")
+            .field("vendor", &self.vendor)
             .field("address", &self.address)
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
@@ -85,6 +87,13 @@ impl ToString for XPUStatus {
 
 impl XPU {
     pub async fn new(bmc: &BMC) -> Result<Self, XPUError> {
+        if !bmc.vendor.eq_ignore_ascii_case("bluefield") {
+            return Err(XPUError::InvalidConfig(format!(
+                "unsupported XPU vendor '{}'",
+                bmc.vendor
+            )));
+        }
+
         let redfish = redfish::build(bmc)?;
 
         // Run discover flow to handle default password scenarios
@@ -95,7 +104,7 @@ impl XPU {
         let xpu = XPU {
             redfish,
             bmc: bmc.clone(),
-            vendor: "-".to_string(),
+            vendor: bmc.vendor.clone(),
             serial_number: "-".to_string(),
             firmware_version: "-".to_string(),
             bmc_version: bmc_ver.version,

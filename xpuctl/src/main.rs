@@ -25,9 +25,15 @@ enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigError::FileNotFound(path) => write!(f, "configuration file not found: {}", path.display()),
-            ConfigError::ReadError(path, e) => write!(f, "failed to read {}: {}", path.display(), e),
-            ConfigError::ParseError(path, e) => write!(f, "failed to parse {}: {}", path.display(), e),
+            ConfigError::FileNotFound(path) => {
+                write!(f, "configuration file not found: {}", path.display())
+            }
+            ConfigError::ReadError(path, e) => {
+                write!(f, "failed to read {}: {}", path.display(), e)
+            }
+            ConfigError::ParseError(path, e) => {
+                write!(f, "failed to parse {}: {}", path.display(), e)
+            }
             ConfigError::InvalidPath(path) => write!(f, "invalid path: {}", path.display()),
         }
     }
@@ -72,8 +78,8 @@ fn expand_path(path_str: &str) -> Result<PathBuf, ConfigError> {
 
     for component in path.iter() {
         if component == "~" {
-            let home = env::var("HOME")
-                .map_err(|_| ConfigError::InvalidPath(path.to_path_buf()))?;
+            let home =
+                env::var("HOME").map_err(|_| ConfigError::InvalidPath(path.to_path_buf()))?;
             expanded.push(home);
         } else {
             expanded.push(component);
@@ -93,8 +99,8 @@ fn load_config(path_str: &str) -> Result<Context, ConfigError> {
     let contents = fs::read_to_string(&config_file)
         .map_err(|e| ConfigError::ReadError(config_file.clone(), e))?;
 
-    let config: Context = toml::from_str(&contents)
-        .map_err(|e| ConfigError::ParseError(config_file, e))?;
+    let config: Context =
+        toml::from_str(&contents).map_err(|e| ConfigError::ParseError(config_file, e))?;
 
     Ok(config)
 }
@@ -111,7 +117,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .add_directive("h2=warn".parse()?);
 
     tracing_subscriber::registry()
-        .with(tracing_fmt::Layer::default().compact().with_writer(std::io::stderr))
+        .with(
+            tracing_fmt::Layer::default()
+                .compact()
+                .with_writer(std::io::stderr),
+        )
         .with(env_filter)
         .try_init()?;
 

@@ -3,7 +3,7 @@ use libonm::xpu::{XPUError, XPU};
 
 use crate::types::{Context, BMC};
 
-struct ListResult {
+pub(crate) struct ListResult {
     name: String,
     status: String,
     vendor: String,
@@ -13,7 +13,12 @@ struct ListResult {
     address: String,
 }
 
-async fn list_bmc(bmc: &BMC, username: &str, password: &str, tls_verify: bool) -> Result<ListResult, XPUError> {
+pub(crate) async fn list_bmc(
+    bmc: &BMC,
+    username: &str,
+    password: &str,
+    tls_verify: bool,
+) -> Result<ListResult, XPUError> {
     let xpu = XPU::new(&bmc.to_libonm_bmc(username, password, tls_verify)).await?;
     Ok(ListResult {
         name: bmc.name.clone(),
@@ -26,11 +31,28 @@ async fn list_bmc(bmc: &BMC, username: &str, password: &str, tls_verify: bool) -
     })
 }
 
-pub async fn run(cxt: &Context) -> Result<(), XPUError> {
+pub(crate) fn print_header() {
     println!(
         "{:<20}{:<10}{:<15}{:<10}{:<15}{:<15}{}",
         "ID", "Status", "Vendor", "FW", "SN", "BMC", "Address"
     );
+}
+
+pub(crate) fn print_result(result: &ListResult) {
+    println!(
+        "{:<20}{:<10}{:<15}{:<10}{:<15}{:<15}{}",
+        result.name,
+        result.status,
+        result.vendor,
+        result.firmware_version,
+        result.serial_number,
+        result.bmc_version,
+        result.address,
+    );
+}
+
+pub async fn run(cxt: &Context) -> Result<(), XPUError> {
+    print_header();
 
     let futures: Vec<_> = cxt
         .bmc
@@ -42,16 +64,7 @@ pub async fn run(cxt: &Context) -> Result<(), XPUError> {
 
     for result in results {
         let r = result?;
-        println!(
-            "{:<20}{:<10}{:<15}{:<10}{:<15}{:<15}{}",
-            r.name,
-            r.status,
-            r.vendor,
-            r.firmware_version,
-            r.serial_number,
-            r.bmc_version,
-            r.address,
-        );
+        print_result(&r);
     }
 
     Ok(())

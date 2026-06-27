@@ -65,7 +65,7 @@ fn is_network_device(path: &Path) -> bool {
                 769 |    // ARPHRD_TUNNEL6 - ip6tnl
                 776 |    // ARPHRD_SIT - sit (IPv6-in-IPv4)
                 778 |    // ARPHRD_IPGRE - gre
-                823      // ARPHRD_IP6GRE - ip6gre
+                823 // ARPHRD_IP6GRE - ip6gre
             );
         }
     }
@@ -140,8 +140,7 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
-    let kind = read_uevent_value(path, "DEVTYPE")
-        .or_else(|| detect_interface_kind(path, name));
+    let kind = read_uevent_value(path, "DEVTYPE").or_else(|| detect_interface_kind(path, name));
 
     Ok(EthInterface {
         name: name.to_string(),
@@ -280,7 +279,7 @@ pub fn get_network_stats() -> NetworkStats {
 }
 
 fn get_conntrack_stats() -> ConntrackStats {
-    let current = read_proc_file("net/nf_conntrack_count");
+    let current = read_sysctl_u64("net.netfilter.nf_conntrack_count");
     let max = read_sysctl_u64("net.netfilter.nf_conntrack_max");
 
     let usage_percent = match (current, max) {
@@ -302,6 +301,10 @@ fn get_softnet_stats() -> SoftnetStats {
         Err(_) => return SoftnetStats::default(),
     };
 
+    parse_softnet_stats(&content)
+}
+
+fn parse_softnet_stats(content: &str) -> SoftnetStats {
     let mut cpus = Vec::new();
     let mut total_processed = 0u64;
     let mut total_dropped = 0u64;
@@ -313,16 +316,19 @@ fn get_softnet_stats() -> SoftnetStats {
             let processed = u64::from_str_radix(fields[0], 16).unwrap_or(0);
             let dropped = u64::from_str_radix(fields[1], 16).unwrap_or(0);
             let time_squeeze = u64::from_str_radix(fields[2], 16).unwrap_or(0);
+            // Since Linux 2.6.23 these values occupy columns 8-10.  Columns
+            // 3-7 are internal fields which must not be presented as these
+            // public counters.
             let cpu_collision = fields
-                .get(3)
+                .get(8)
                 .and_then(|s| u64::from_str_radix(s, 16).ok())
                 .unwrap_or(0);
             let received_rps = fields
-                .get(4)
+                .get(9)
                 .and_then(|s| u64::from_str_radix(s, 16).ok())
                 .unwrap_or(0);
             let flow_limit_count = fields
-                .get(5)
+                .get(10)
                 .and_then(|s| u64::from_str_radix(s, 16).ok())
                 .unwrap_or(0);
 
@@ -400,13 +406,6 @@ fn find_stat_value(parts: &[&str], key: &str) -> Option<u64> {
     None
 }
 
-fn read_proc_file(path: &str) -> Option<u64> {
-    let full_path = Path::new("/proc").join(path);
-    fs::read_to_string(&full_path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-}
-
 pub fn get_interface_stats(name: &str) -> Result<InterfaceStats, EthError> {
     let path = Path::new(SYS_CLASS_NET).join(name).join("statistics");
     if !path.exists() {
@@ -448,7 +447,11 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
         let mut settings = EthtoolSettings::default();
 
         let mut rings = handle.ring().get(Some(name)).execute().await;
-        while let Ok(Some(msg)) = rings.try_next().await {
+        while let Some(msg) = rings.try_next().await.map_err(|e| {
+            EthError::Internal(format!(
+                "failed to query ethtool ring settings for {name}: {e}"
+            ))
+        })? {
             for attr in msg.payload.nlas {
                 if let EthtoolAttr::Ring(ring_attr) = attr {
                     match ring_attr {
@@ -463,7 +466,11 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
         }
 
         let mut coalesces = handle.coalesce().get(Some(name)).execute().await;
-        while let Ok(Some(msg)) = coalesces.try_next().await {
+        while let Some(msg) = coalesces.try_next().await.map_err(|e| {
+            EthError::Internal(format!(
+                "failed to query ethtool coalesce settings for {name}: {e}"
+            ))
+        })? {
             for attr in msg.payload.nlas {
                 if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
                     match coalesce_attr {
@@ -476,7 +483,9 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
         }
 
         let mut features = handle.feature().get(Some(name)).execute().await;
-        while let Ok(Some(msg)) = features.try_next().await {
+        while let Some(msg) = features.try_next().await.map_err(|e| {
+            EthError::Internal(format!("failed to query ethtool features for {name}: {e}"))
+        })? {
             for attr in msg.payload.nlas {
                 if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
                     for bit in bits {
@@ -491,14 +500,14 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
             }
         }
 
-        settings
+        Ok::<_, EthError>(settings)
     })
     .await;
 
     conn_handle.abort();
 
     match result {
-        Ok(settings) => Ok(settings),
+        Ok(settings) => settings,
         Err(_) => Err(EthError::Internal(format!(
             "ethtool query timed out for {}",
             name
@@ -517,7 +526,9 @@ pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
         let mut settings = LinkSettings::default();
 
         let mut links = handle.link().get().match_name(name.to_string()).execute();
-        if let Some(link) = links.try_next().await.ok().flatten() {
+        if let Some(link) = links.try_next().await.map_err(|e| {
+            EthError::Internal(format!("failed to query link settings for {name}: {e}"))
+        })? {
             for attr in link.attributes {
                 match attr {
                     LinkAttribute::Mtu(v) => settings.mtu = Some(v),
@@ -536,16 +547,18 @@ pub async fn get_link_settings(name: &str) -> Result<LinkSettings, EthError> {
                     _ => {}
                 }
             }
+        } else {
+            return Err(EthError::NotFound(name.to_string()));
         }
 
-        settings
+        Ok::<_, EthError>(settings)
     })
     .await;
 
     conn_handle.abort();
 
     match result {
-        Ok(settings) => Ok(settings),
+        Ok(settings) => settings,
         Err(_) => Err(EthError::Internal(format!(
             "rtnetlink query timed out for {}",
             name
@@ -560,36 +573,39 @@ pub async fn get_interface_addresses(name: &str) -> Result<Vec<String>, EthError
         .map_err(|e| EthError::Internal(format!("Failed to create rtnetlink connection: {}", e)))?;
     let conn_handle = tokio::spawn(conn);
 
-    let ifindex = get_interface_index(name);
+    let ifindex = get_interface_index(name).ok_or_else(|| EthError::NotFound(name.to_string()))?;
 
-    let result = tokio::time::timeout(NETLINK_TIMEOUT, async {
-        let mut addresses = Vec::new();
+    let result =
+        tokio::time::timeout(NETLINK_TIMEOUT, async {
+            let mut addresses = Vec::new();
 
-        let mut addr_stream = handle.address().get().execute();
-        while let Ok(Some(msg)) = addr_stream.try_next().await {
-            if Some(msg.header.index) != ifindex {
-                continue;
-            }
+            let mut addr_stream = handle.address().get().execute();
+            while let Some(msg) = addr_stream.try_next().await.map_err(|e| {
+                EthError::Internal(format!("failed to query addresses for {name}: {e}"))
+            })? {
+                if msg.header.index != ifindex {
+                    continue;
+                }
 
-            let prefix_len = msg.header.prefix_len;
-            for attr in &msg.attributes {
-                match attr {
-                    AddressAttribute::Address(addr) => {
-                        addresses.push(format!("{}/{}", addr, prefix_len));
+                let prefix_len = msg.header.prefix_len;
+                for attr in &msg.attributes {
+                    match attr {
+                        AddressAttribute::Address(addr) => {
+                            addresses.push(format!("{}/{}", addr, prefix_len));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-        }
 
-        addresses
-    })
-    .await;
+            Ok::<_, EthError>(addresses)
+        })
+        .await;
 
     conn_handle.abort();
 
     match result {
-        Ok(addrs) => Ok(addrs),
+        Ok(addrs) => addrs,
         Err(_) => Err(EthError::Internal(format!(
             "rtnetlink address query timed out for {}",
             name
@@ -605,7 +621,10 @@ fn get_interface_index(name: &str) -> Option<u32> {
 }
 
 pub async fn get_routes() -> Result<RouteTable, EthError> {
-    use netlink_packet_route::route::{RouteAddress, RouteAttribute, RouteProtocol as RtProto, RouteScope as RtScope, RouteType as RtType};
+    use netlink_packet_route::route::{
+        RouteAddress, RouteAttribute, RouteProtocol as RtProto, RouteScope as RtScope,
+        RouteType as RtType,
+    };
     use std::net::Ipv4Addr;
 
     let (conn, handle, _) = rtnetlink::new_connection()
@@ -617,7 +636,11 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
 
         let ipv4_msg = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::new().build();
         let mut ipv4_routes = handle.route().get(ipv4_msg).execute();
-        while let Ok(Some(route)) = ipv4_routes.try_next().await {
+        while let Some(route) = ipv4_routes
+            .try_next()
+            .await
+            .map_err(|e| EthError::Internal(format!("failed to query IPv4 routes: {e}")))?
+        {
             let header = &route.header;
             let mut entry = RouteEntry {
                 prefix_len: header.destination_prefix_length,
@@ -691,7 +714,11 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
 
         let ipv6_msg = rtnetlink::RouteMessageBuilder::<std::net::Ipv6Addr>::new().build();
         let mut ipv6_routes = handle.route().get(ipv6_msg).execute();
-        while let Ok(Some(route)) = ipv6_routes.try_next().await {
+        while let Some(route) = ipv6_routes
+            .try_next()
+            .await
+            .map_err(|e| EthError::Internal(format!("failed to query IPv6 routes: {e}")))?
+        {
             let header = &route.header;
             let mut entry = RouteEntry {
                 prefix_len: header.destination_prefix_length,
@@ -757,21 +784,23 @@ pub async fn get_routes() -> Result<RouteTable, EthError> {
             }
 
             if entry.destination.is_empty() {
-                entry.destination = format!("::{}", entry.prefix_len);
+                entry.destination = format!("::/{}", entry.prefix_len);
             }
 
             table.ipv6.push(entry);
         }
 
-        table
+        Ok::<_, EthError>(table)
     })
     .await;
 
     conn_handle.abort();
 
     match result {
-        Ok(table) => Ok(table),
-        Err(_) => Err(EthError::Internal("rtnetlink route query timed out".to_string())),
+        Ok(table) => table,
+        Err(_) => Err(EthError::Internal(
+            "rtnetlink route query timed out".to_string(),
+        )),
     }
 }
 
@@ -791,7 +820,7 @@ fn get_interface_name_by_index(index: u32) -> Option<String> {
 }
 
 /// Get NAT rules from nftables and iptables.
-/// 
+///
 /// This function queries both nftables (via `nft -j list ruleset`) and iptables
 /// (via `iptables -t nat -S`) to extract NAT rules (SNAT, DNAT, MASQUERADE).
 /// Both sources are checked since Linux can have rules in both subsystems
@@ -800,52 +829,72 @@ pub fn get_nat_rules() -> Result<NatTable, EthError> {
     use std::process::Command;
 
     let mut table = NatTable::default();
+    let mut successful_backends = 0;
+    let mut backend_errors = Vec::new();
 
     // Try nftables first
-    let output = Command::new("nft")
-        .args(["-j", "list", "ruleset"])
-        .output();
+    let output = Command::new("nft").args(["-j", "list", "ruleset"]).output();
 
     match output {
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            if let Err(e) = parse_nftables_json(&stdout, &mut table) {
-                tracing::debug!("Failed to parse nftables JSON: {}", e);
+            match parse_nftables_json(&stdout, &mut table) {
+                Ok(()) => successful_backends += 1,
+                Err(e) => backend_errors.push(format!("nft: {e}")),
             }
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            if !stderr.contains("Permission denied") && !stderr.contains("not found") {
-                tracing::debug!("nft command failed: {}", stderr);
-            }
+            backend_errors.push(format!("nft: {}", stderr.trim()));
         }
         Err(e) => {
-            tracing::debug!("Failed to run nft: {}", e);
+            backend_errors.push(format!("nft: {e}"));
         }
     }
 
     // Also try iptables (for Tailscale, older systems, etc.)
     for cmd in ["iptables", "ip6tables"] {
-        let output = Command::new(cmd)
-            .args(["-t", "nat", "-S"])
-            .output();
+        let output = Command::new(cmd).args(["-t", "nat", "-S"]).output();
 
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 parse_iptables_nat(&stdout, &mut table);
+                successful_backends += 1;
             }
-            Ok(_) | Err(_) => {
-                tracing::debug!("Failed to run {} -t nat -S", cmd);
+            Ok(out) => {
+                backend_errors.push(format!(
+                    "{cmd}: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Err(e) => {
+                backend_errors.push(format!("{cmd}: {e}"));
             }
         }
     }
+
+    if successful_backends == 0 {
+        return Err(EthError::Internal(format!(
+            "unable to query NAT rules: {}",
+            backend_errors.join("; ")
+        )));
+    }
+
+    // iptables-nft may expose the same rule through both commands.
+    let mut unique = Vec::with_capacity(table.rules.len());
+    for rule in table.rules.drain(..) {
+        if !unique.contains(&rule) {
+            unique.push(rule);
+        }
+    }
+    table.rules = unique;
 
     Ok(table)
 }
 
 /// Parse nftables JSON output to extract NAT rules.
-/// 
+///
 /// The JSON format follows the libnftables-json schema where rules contain
 /// expressions (expr) that may include NAT statements like snat, dnat, or masquerade.
 fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthError> {
@@ -854,13 +903,15 @@ fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthEr
     let root: Value = serde_json::from_str(json_str)
         .map_err(|e| EthError::Internal(format!("Invalid nftables JSON: {}", e)))?;
 
-    let nftables = root.get("nftables")
+    let nftables = root
+        .get("nftables")
         .and_then(|v| v.as_array())
         .ok_or_else(|| EthError::Internal("Missing 'nftables' array in JSON".to_string()))?;
 
     // First pass: collect chain information (for hook/type context)
-    let mut chain_info: std::collections::HashMap<(String, String, String), NftChainInfo> = 
+    let mut chain_info: std::collections::HashMap<(String, String, String), NftChainInfo> =
         std::collections::HashMap::new();
+    let mut nat_tables = std::collections::HashSet::new();
 
     for item in nftables {
         if let Some(chain) = item.get("chain") {
@@ -870,12 +921,20 @@ fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthEr
             let chain_type = chain.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let hook = chain.get("hook").and_then(|v| v.as_str()).unwrap_or("");
 
+            if chain_type == "nat" {
+                nat_tables.insert((family.to_string(), table_name.to_string()));
+            }
+
             chain_info.insert(
-                (family.to_string(), table_name.to_string(), chain_name.to_string()),
+                (
+                    family.to_string(),
+                    table_name.to_string(),
+                    chain_name.to_string(),
+                ),
                 NftChainInfo {
                     chain_type: chain_type.to_string(),
                     hook: hook.to_string(),
-                }
+                },
             );
         }
     }
@@ -887,9 +946,20 @@ fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthEr
             let table_name = rule.get("table").and_then(|v| v.as_str()).unwrap_or("");
             let chain_name = rule.get("chain").and_then(|v| v.as_str()).unwrap_or("");
 
+            // `nft -j list ruleset` includes filter, route, and other tables.
+            // A jump is relevant here only when it belongs to a table that has
+            // a NAT base chain.
+            if !nat_tables.contains(&(family.to_string(), table_name.to_string())) {
+                continue;
+            }
+
             // Get chain info to check if this is a NAT chain
-            let info = chain_info.get(&(family.to_string(), table_name.to_string(), chain_name.to_string()));
-            
+            let info = chain_info.get(&(
+                family.to_string(),
+                table_name.to_string(),
+                chain_name.to_string(),
+            ));
+
             if let Some(exprs) = rule.get("expr").and_then(|v| v.as_array()) {
                 if let Some(nat_rule) = parse_nft_rule_exprs(chain_name, exprs, info) {
                     table.rules.push(nat_rule);
@@ -909,7 +979,11 @@ struct NftChainInfo {
 }
 
 /// Parse nftables rule expressions to extract NAT information.
-fn parse_nft_rule_exprs(chain: &str, exprs: &[serde_json::Value], _chain_info: Option<&NftChainInfo>) -> Option<NatRule> {
+fn parse_nft_rule_exprs(
+    chain: &str,
+    exprs: &[serde_json::Value],
+    _chain_info: Option<&NftChainInfo>,
+) -> Option<NatRule> {
     let mut nat_type: Option<NatType> = None;
     let mut to_addr: Option<String> = None;
     let mut to_port: Option<String> = None;
@@ -952,11 +1026,26 @@ fn parse_nft_rule_exprs(chain: &str, exprs: &[serde_json::Value], _chain_info: O
                     _ => {}
                 }
             }
+        } else if let Some(jump) = expr.get("jump").or_else(|| expr.get("goto")) {
+            let target = jump
+                .as_str()
+                .or_else(|| jump.get("target").and_then(|v| v.as_str()));
+            if let Some(target) = target {
+                nat_type = Some(NatType::Jump(target.to_string()));
+            }
         }
 
         if let Some(match_expr) = expr.get("match") {
-            parse_nft_match(match_expr, &mut protocol, &mut source, &mut destination, 
-                           &mut dport, &mut sport, &mut interface_in, &mut interface_out);
+            parse_nft_match(
+                match_expr,
+                &mut protocol,
+                &mut source,
+                &mut destination,
+                &mut dport,
+                &mut sport,
+                &mut interface_in,
+                &mut interface_out,
+            );
         }
 
         if let Some(counter) = expr.get("counter") {
@@ -976,8 +1065,12 @@ fn parse_nft_rule_exprs(chain: &str, exprs: &[serde_json::Value], _chain_info: O
         protocol,
         dport,
         sport,
-        to_source: if matches!(nat_type, NatType::Snat | NatType::Masquerade) { to_addr.clone() } else { None },
-        to_destination: if matches!(nat_type, NatType::Dnat) { 
+        to_source: if matches!(nat_type, NatType::Snat | NatType::Masquerade) {
+            to_addr.clone()
+        } else {
+            None
+        },
+        to_destination: if matches!(nat_type, NatType::Dnat) {
             // Combine address and port for DNAT target
             match (&to_addr, &to_port) {
                 (Some(addr), Some(port)) => Some(format!("{}:{}", addr, port)),
@@ -985,8 +1078,8 @@ fn parse_nft_rule_exprs(chain: &str, exprs: &[serde_json::Value], _chain_info: O
                 (None, Some(port)) => Some(format!(":{}", port)),
                 (None, None) => None,
             }
-        } else { 
-            None 
+        } else {
+            None
         },
         interface_in,
         interface_out,
@@ -1060,15 +1153,22 @@ fn parse_nft_match(
             match key {
                 "iifname" => *interface_in = right.as_str().map(|s| s.to_string()),
                 "oifname" => *interface_out = right.as_str().map(|s| s.to_string()),
-                "l4proto" => *protocol = right.as_str().map(|s| s.to_string())
-                    .or_else(|| right.as_u64().map(|n| proto_num_to_name(n))),
+                "l4proto" => {
+                    *protocol = right
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .or_else(|| right.as_u64().map(|n| proto_num_to_name(n)))
+                }
                 _ => {}
             }
         }
 
         // Check for payload expressions (addresses, ports)
         if let Some(payload) = left.get("payload") {
-            let proto = payload.get("protocol").and_then(|p| p.as_str()).unwrap_or("");
+            let proto = payload
+                .get("protocol")
+                .and_then(|p| p.as_str())
+                .unwrap_or("");
             let field = payload.get("field").and_then(|f| f.as_str()).unwrap_or("");
 
             match (proto, field) {
@@ -1100,6 +1200,12 @@ fn proto_num_to_name(num: u64) -> String {
 }
 
 fn parse_iptables_nat(output: &str, table: &mut NatTable) {
+    let declared_chains: std::collections::HashSet<&str> = output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("-N "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+
     for line in output.lines() {
         let line = line.trim();
         if !line.starts_with("-A ") {
@@ -1177,8 +1283,12 @@ fn parse_iptables_nat(output: &str, table: &mut NatTable) {
                             "MASQUERADE" => nat_type = Some(NatType::Masquerade),
                             "SNAT" => nat_type = Some(NatType::Snat),
                             "DNAT" => nat_type = Some(NatType::Dnat),
-                            "RETURN" | "ACCEPT" | "DROP" | "REJECT" | "LOG" => {}
-                            _ => nat_type = Some(NatType::Jump(target.to_string())),
+                            _ if declared_chains.contains(target) => {
+                                nat_type = Some(NatType::Jump(target.to_string()))
+                            }
+                            // Extension targets (REDIRECT, NETMAP, LOG, and
+                            // future targets) are not chain jumps.
+                            _ => {}
                         }
                         i += 1;
                     }
@@ -1228,5 +1338,54 @@ fn parse_iptables_nat(output: &str, table: &mut NatTable) {
                 bytes: 0,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn softnet_uses_current_kernel_field_positions() {
+        let stats = parse_softnet_stats(
+            "00000001 00000002 00000003 00000004 00000005 00000006 00000007 00000008 00000009 0000000a 0000000b\n",
+        );
+
+        assert_eq!(stats.cpus.len(), 1);
+        let cpu = &stats.cpus[0];
+        assert_eq!(cpu.processed, 1);
+        assert_eq!(cpu.dropped, 2);
+        assert_eq!(cpu.time_squeeze, 3);
+        assert_eq!(cpu.cpu_collision, 9);
+        assert_eq!(cpu.received_rps, 10);
+        assert_eq!(cpu.flow_limit_count, 11);
+    }
+
+    #[test]
+    fn iptables_only_classifies_declared_chains_as_jumps() {
+        let mut table = NatTable::default();
+        parse_iptables_nat(
+            "-N CUSTOM\n-A PREROUTING -j REDIRECT --to-ports 8080\n-A PREROUTING -j CUSTOM\n",
+            &mut table,
+        );
+
+        assert_eq!(table.rules.len(), 1);
+        assert_eq!(table.rules[0].nat_type, NatType::Jump("CUSTOM".into()));
+    }
+
+    #[test]
+    fn nft_native_jump_is_reported() {
+        let mut table = NatTable::default();
+        parse_nftables_json(
+            r#"{"nftables":[
+                {"chain":{"family":"ip","table":"nat","name":"PREROUTING","type":"nat","hook":"prerouting"}},
+                {"rule":{"family":"ip","table":"nat","chain":"PREROUTING","expr":[{"jump":{"target":"CUSTOM"}}]}}
+            ]}"#,
+            &mut table,
+        )
+        .unwrap();
+
+        assert_eq!(table.rules.len(), 1);
+        assert_eq!(table.rules[0].nat_type, NatType::Jump("CUSTOM".into()));
     }
 }
