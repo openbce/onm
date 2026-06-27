@@ -15,6 +15,7 @@ impl TuningProfile {
         }
     }
 
+    #[allow(dead_code)]
     pub fn header_suffix(&self) -> &'static str {
         match self {
             TuningProfile::ControlPlane => "Suggested (CP 10k)",
@@ -313,6 +314,7 @@ fn format_with_suggested(current: u64, suggested: u64) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn print_sysctl_tables(profile: TuningProfile) {
     use libonm::eth;
 

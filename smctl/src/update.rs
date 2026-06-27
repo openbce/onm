@@ -1,5 +1,6 @@
 use libonm::sm::{self, Partition, PartitionKey, PartitionQoS, UFMConfig, UFMError};
 
+#[allow(dead_code)]
 pub struct UpdateOptions {
     pub pkey: String,
     pub mtu: u16,

@@ -9,6 +9,7 @@ use bluefield::Bluefield;
 mod bluefield;
 
 #[async_trait]
+#[allow(dead_code)]
 pub trait Redfish {
     async fn discover(&self) -> Result<(), RedfishError>;
     async fn change_password(&self, passwd: String) -> Result<(), RedfishError>;

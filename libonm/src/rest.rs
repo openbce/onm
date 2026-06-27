@@ -144,6 +144,7 @@ impl RestClient {
         Ok(data)
     }
 
+    #[allow(dead_code)]
     pub async fn patch<'a, S: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,

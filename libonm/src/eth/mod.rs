@@ -836,6 +836,7 @@ fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthEr
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct NftChainInfo {
     chain_type: String,
     hook: String,
