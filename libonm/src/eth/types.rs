@@ -387,7 +387,7 @@ pub struct RouteTable {
 }
 
 // NAT types (iptables/nftables)
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum NatType {
     Snat,
     Dnat,
