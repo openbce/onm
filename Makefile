@@ -1,6 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 RELEASE_DIR := release
-RELEASE_NAME := onm-$(VERSION)-linux-amd64
+ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+RELEASE_NAME := onm-$(VERSION)-linux-$(ARCH)
 BINARIES := ethctl smctl hcactl xpuctl
 BUILD_IMAGE := onm-builder
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo docker)
