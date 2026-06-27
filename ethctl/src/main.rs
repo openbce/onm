@@ -54,8 +54,12 @@ enum Commands {
         #[arg(short = '6', long)]
         ipv6: bool,
     },
-    /// Show NAT rules (iptables nat table)
-    Nat,
+    /// Show NAT rules (nftables and iptables)
+    Nat {
+        /// Filter by chain name (e.g., ts-postrouting, POSTROUTING)
+        #[arg(short, long)]
+        chain: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -80,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             generate,
         } => link::run(&name, &profile, generate.as_deref()).await?,
         Commands::Route { ipv4, ipv6 } => route::run(ipv4, ipv6).await?,
-        Commands::Nat => nat::run()?,
+        Commands::Nat { chain } => nat::run(chain.as_deref())?,
     }
 
     Ok(())

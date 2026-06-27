@@ -790,17 +790,18 @@ fn get_interface_name_by_index(index: u32) -> Option<String> {
     None
 }
 
-/// Get NAT rules from nftables using JSON API.
+/// Get NAT rules from nftables and iptables.
 /// 
-/// This function queries nftables via `nft -j list ruleset` and parses the JSON output
-/// to extract NAT rules (SNAT, DNAT, MASQUERADE). This approach is more robust than
-/// parsing iptables text output as the JSON format is stable and well-defined.
+/// This function queries both nftables (via `nft -j list ruleset`) and iptables
+/// (via `iptables -t nat -S`) to extract NAT rules (SNAT, DNAT, MASQUERADE).
+/// Both sources are checked since Linux can have rules in both subsystems
+/// (e.g., Docker uses nftables, Tailscale uses iptables).
 pub fn get_nat_rules() -> Result<NatTable, EthError> {
     use std::process::Command;
 
     let mut table = NatTable::default();
 
-    // Try nftables first (preferred)
+    // Try nftables first
     let output = Command::new("nft")
         .args(["-j", "list", "ruleset"])
         .output();
@@ -820,6 +821,23 @@ pub fn get_nat_rules() -> Result<NatTable, EthError> {
         }
         Err(e) => {
             tracing::debug!("Failed to run nft: {}", e);
+        }
+    }
+
+    // Also try iptables (for Tailscale, older systems, etc.)
+    for cmd in ["iptables", "ip6tables"] {
+        let output = Command::new(cmd)
+            .args(["-t", "nat", "-S"])
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                parse_iptables_nat(&stdout, &mut table);
+            }
+            Ok(_) | Err(_) => {
+                tracing::debug!("Failed to run {} -t nat -S", cmd);
+            }
         }
     }
 
@@ -1078,5 +1096,135 @@ fn proto_num_to_name(num: u64) -> String {
         1 => "icmp".to_string(),
         58 => "icmpv6".to_string(),
         _ => num.to_string(),
+    }
+}
+
+fn parse_iptables_nat(output: &str, table: &mut NatTable) {
+    for line in output.lines() {
+        let line = line.trim();
+        if !line.starts_with("-A ") {
+            continue;
+        }
+
+        let mut nat_type: Option<NatType> = None;
+        let mut chain = String::new();
+        let mut protocol: Option<String> = None;
+        let mut source: Option<String> = None;
+        let mut destination: Option<String> = None;
+        let mut dport: Option<String> = None;
+        let mut sport: Option<String> = None;
+        let mut interface_in: Option<String> = None;
+        let mut interface_out: Option<String> = None;
+        let mut to_source: Option<String> = None;
+        let mut to_destination: Option<String> = None;
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let mut i = 0;
+        while i < parts.len() {
+            match parts[i] {
+                "-A" => {
+                    if i + 1 < parts.len() {
+                        chain = parts[i + 1].to_string();
+                        i += 1;
+                    }
+                }
+                "-p" => {
+                    if i + 1 < parts.len() {
+                        protocol = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "-s" => {
+                    if i + 1 < parts.len() {
+                        source = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "-d" => {
+                    if i + 1 < parts.len() {
+                        destination = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "--dport" => {
+                    if i + 1 < parts.len() {
+                        dport = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "--sport" => {
+                    if i + 1 < parts.len() {
+                        sport = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "-i" => {
+                    if i + 1 < parts.len() {
+                        interface_in = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "-o" => {
+                    if i + 1 < parts.len() {
+                        interface_out = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "-j" => {
+                    if i + 1 < parts.len() {
+                        match parts[i + 1] {
+                            "MASQUERADE" => nat_type = Some(NatType::Masquerade),
+                            "SNAT" => nat_type = Some(NatType::Snat),
+                            "DNAT" => nat_type = Some(NatType::Dnat),
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                }
+                "--to-source" => {
+                    if i + 1 < parts.len() {
+                        to_source = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "--to-destination" => {
+                    if i + 1 < parts.len() {
+                        to_destination = Some(parts[i + 1].to_string());
+                        i += 1;
+                    }
+                }
+                "--to" => {
+                    if i + 1 < parts.len() {
+                        let target = parts[i + 1].to_string();
+                        if nat_type == Some(NatType::Snat) {
+                            to_source = Some(target);
+                        } else if nat_type == Some(NatType::Dnat) {
+                            to_destination = Some(target);
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        if let Some(nt) = nat_type {
+            table.rules.push(NatRule {
+                chain,
+                nat_type: nt,
+                source,
+                destination,
+                protocol,
+                dport,
+                sport,
+                to_source,
+                to_destination,
+                interface_in,
+                interface_out,
+                packets: 0,
+                bytes: 0,
+            });
+        }
     }
 }

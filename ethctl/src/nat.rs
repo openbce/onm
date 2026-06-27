@@ -1,11 +1,25 @@
 use comfy_table::{presets::UTF8_FULL, Table};
 use libonm::eth::{self, EthError};
 
-pub fn run() -> Result<(), EthError> {
+pub fn run(chain_filter: Option<&str>) -> Result<(), EthError> {
     let nat_table = eth::get_nat_rules()?;
 
-    if nat_table.rules.is_empty() {
-        println!("No NAT rules found (SNAT/DNAT/MASQUERADE)");
+    let rules: Vec<_> = nat_table
+        .rules
+        .iter()
+        .filter(|r| {
+            chain_filter
+                .map(|f| r.chain.to_lowercase().contains(&f.to_lowercase()))
+                .unwrap_or(true)
+        })
+        .collect();
+
+    if rules.is_empty() {
+        if chain_filter.is_some() {
+            println!("No NAT rules found matching chain filter");
+        } else {
+            println!("No NAT rules found (SNAT/DNAT/MASQUERADE)");
+        }
         return Ok(());
     }
 
@@ -24,7 +38,7 @@ pub fn run() -> Result<(), EthError> {
         "Bytes",
     ]);
 
-    for rule in &nat_table.rules {
+    for rule in &rules {
         let target = match &rule.nat_type {
             libonm::eth::NatType::Snat => {
                 rule.to_source.clone().map(|s| format!("to:{}", s)).unwrap_or("-".to_string())
