@@ -47,6 +47,7 @@ pub fn run(chain_filter: Option<&str>) -> Result<(), EthError> {
                 rule.to_destination.clone().map(|s| format!("to:{}", s)).unwrap_or("-".to_string())
             }
             libonm::eth::NatType::Masquerade => "-".to_string(),
+            libonm::eth::NatType::Jump(chain) => chain.clone(),
         };
 
         let dest_with_port = match (&rule.destination, &rule.dport) {

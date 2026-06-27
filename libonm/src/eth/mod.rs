@@ -1172,11 +1172,13 @@ fn parse_iptables_nat(output: &str, table: &mut NatTable) {
                 }
                 "-j" => {
                     if i + 1 < parts.len() {
-                        match parts[i + 1] {
+                        let target = parts[i + 1];
+                        match target {
                             "MASQUERADE" => nat_type = Some(NatType::Masquerade),
                             "SNAT" => nat_type = Some(NatType::Snat),
                             "DNAT" => nat_type = Some(NatType::Dnat),
-                            _ => {}
+                            "RETURN" | "ACCEPT" | "DROP" | "REJECT" | "LOG" => {}
+                            _ => nat_type = Some(NatType::Jump(target.to_string())),
                         }
                         i += 1;
                     }

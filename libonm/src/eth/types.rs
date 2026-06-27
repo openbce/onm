@@ -392,6 +392,7 @@ pub enum NatType {
     Snat,
     Dnat,
     Masquerade,
+    Jump(String),
 }
 
 impl ToString for NatType {
@@ -400,6 +401,7 @@ impl ToString for NatType {
             NatType::Snat => "SNAT".to_string(),
             NatType::Dnat => "DNAT".to_string(),
             NatType::Masquerade => "MASQUERADE".to_string(),
+            NatType::Jump(chain) => format!("JUMP:{}", chain),
         }
     }
 }
