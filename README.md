@@ -47,6 +47,14 @@ ethctl route
 ethctl nat
 ```
 
+The profiles use kube-proxy-compatible, CPU-derived conntrack capacity. Settings
+whose correct value depends on RAM, CNI routing, NIC capabilities, or the full
+network path are reported as `observe` and are not changed automatically. This
+includes UDP memory pools, socket defaults, ARP policy, reverse-path filtering,
+MTU, queue length, interrupt coalescing, and offloads. Validate those settings
+with workload measurements before applying device-specific candidates from
+`ethctl link`.
+
 ## onm-shell
 
 ```bash

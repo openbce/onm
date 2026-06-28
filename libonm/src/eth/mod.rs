@@ -213,6 +213,30 @@ fn read_sysctl_u64(key: &str) -> Option<u64> {
     read_sysctl(key).and_then(|s| s.parse().ok())
 }
 
+fn get_interface_rp_filters() -> Vec<(String, u64)> {
+    let path = Path::new(PROC_SYS).join("net/ipv4/conf");
+    let mut values = fs::read_dir(path)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if matches!(name.as_str(), "all" | "default") {
+                return None;
+            }
+            let value = fs::read_to_string(entry.path().join("rp_filter"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()?;
+            Some((name, value))
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|a, b| a.0.cmp(&b.0));
+    values
+}
+
 pub fn get_network_sysctl() -> NetworkSysctl {
     NetworkSysctl {
         conntrack: ConntrackSettings {
@@ -231,6 +255,8 @@ pub fn get_network_sysctl() -> NetworkSysctl {
                 "net.netfilter.nf_conntrack_tcp_timeout_fin_wait",
             ),
             tcp_max_retrans: read_sysctl_u64("net.netfilter.nf_conntrack_tcp_max_retrans"),
+            udp_timeout: read_sysctl_u64("net.netfilter.nf_conntrack_udp_timeout"),
+            udp_timeout_stream: read_sysctl_u64("net.netfilter.nf_conntrack_udp_timeout_stream"),
         },
         socket_buffer: SocketBufferSettings {
             rmem_max: read_sysctl_u64("net.core.rmem_max"),
@@ -240,6 +266,8 @@ pub fn get_network_sysctl() -> NetworkSysctl {
             tcp_rmem: read_sysctl("net.ipv4.tcp_rmem"),
             tcp_wmem: read_sysctl("net.ipv4.tcp_wmem"),
             netdev_max_backlog: read_sysctl_u64("net.core.netdev_max_backlog"),
+            netdev_budget: read_sysctl_u64("net.core.netdev_budget"),
+            netdev_budget_usecs: read_sysctl_u64("net.core.netdev_budget_usecs"),
         },
         tcp: TcpSettings {
             somaxconn: read_sysctl_u64("net.core.somaxconn"),
@@ -250,6 +278,7 @@ pub fn get_network_sysctl() -> NetworkSysctl {
             keepalive_probes: read_sysctl_u64("net.ipv4.tcp_keepalive_probes"),
             keepalive_intvl: read_sysctl_u64("net.ipv4.tcp_keepalive_intvl"),
             ip_local_port_range: read_sysctl("net.ipv4.ip_local_port_range"),
+            ip_local_reserved_ports: read_sysctl("net.ipv4.ip_local_reserved_ports"),
         },
         udp: UdpSettings {
             rmem_min: read_sysctl_u64("net.ipv4.udp_rmem_min"),
@@ -262,10 +291,14 @@ pub fn get_network_sysctl() -> NetworkSysctl {
             gc_thresh3: read_sysctl_u64("net.ipv4.neigh.default.gc_thresh3"),
             arp_ignore: read_sysctl_u64("net.ipv4.conf.all.arp_ignore"),
             arp_announce: read_sysctl_u64("net.ipv4.conf.all.arp_announce"),
+            ipv6_gc_thresh1: read_sysctl_u64("net.ipv6.neigh.default.gc_thresh1"),
+            ipv6_gc_thresh2: read_sysctl_u64("net.ipv6.neigh.default.gc_thresh2"),
+            ipv6_gc_thresh3: read_sysctl_u64("net.ipv6.neigh.default.gc_thresh3"),
         },
         rp_filter: RpFilterSettings {
             all: read_sysctl_u64("net.ipv4.conf.all.rp_filter"),
             default: read_sysctl_u64("net.ipv4.conf.default.rp_filter"),
+            interfaces: get_interface_rp_filters(),
         },
     }
 }
@@ -286,12 +319,53 @@ fn get_conntrack_stats() -> ConntrackStats {
         (Some(c), Some(m)) if m > 0 => Some((c as f64 / m as f64) * 100.0),
         _ => None,
     };
+    let (insert_failed, drop, early_drop) =
+        fs::read_to_string(Path::new(PROC_NET).join("stat/nf_conntrack"))
+            .ok()
+            .map(|content| parse_conntrack_counters(&content))
+            .unwrap_or((None, None, None));
 
     ConntrackStats {
         current,
         max,
         usage_percent,
+        insert_failed,
+        drop,
+        early_drop,
     }
+}
+
+fn parse_conntrack_counters(content: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
+    let mut lines = content.lines();
+    let Some(header) = lines.next() else {
+        return (None, None, None);
+    };
+    let columns = header.split_whitespace().collect::<Vec<_>>();
+    let index = |name: &str| columns.iter().position(|column| *column == name);
+    let insert_failed_index = index("insert_failed");
+    let drop_index = index("drop");
+    let early_drop_index = index("early_drop");
+
+    let mut insert_failed = insert_failed_index.map(|_| 0u64);
+    let mut drop = drop_index.map(|_| 0u64);
+    let mut early_drop = early_drop_index.map(|_| 0u64);
+    for line in lines {
+        let values = line.split_whitespace().collect::<Vec<_>>();
+        let add = |target: &mut Option<u64>, column: Option<usize>| {
+            if let (Some(total), Some(value)) = (
+                target.as_mut(),
+                column
+                    .and_then(|position| values.get(position))
+                    .and_then(|value| u64::from_str_radix(value, 16).ok()),
+            ) {
+                *total = total.saturating_add(value);
+            }
+        };
+        add(&mut insert_failed, insert_failed_index);
+        add(&mut drop, drop_index);
+        add(&mut early_drop, early_drop_index);
+    }
+    (insert_failed, drop, early_drop)
 }
 
 fn get_softnet_stats() -> SoftnetStats {
@@ -394,7 +468,29 @@ fn get_socket_stats() -> SocketStats {
         }
     }
 
+    if let Ok(netstat) = fs::read_to_string(Path::new(PROC_NET).join("netstat")) {
+        stats.listen_overflows = parse_netstat_value(&netstat, "TcpExt:", "ListenOverflows");
+        stats.listen_drops = parse_netstat_value(&netstat, "TcpExt:", "ListenDrops");
+    }
+
     stats
+}
+
+fn parse_netstat_value(content: &str, section: &str, key: &str) -> Option<u64> {
+    let mut lines = content.lines();
+    while let Some(header) = lines.next() {
+        let Some(values) = lines.next() else {
+            break;
+        };
+        if !header.starts_with(section) || !values.starts_with(section) {
+            continue;
+        }
+        let keys = header.split_whitespace().skip(1).collect::<Vec<_>>();
+        let values = values.split_whitespace().skip(1).collect::<Vec<_>>();
+        let position = keys.iter().position(|candidate| *candidate == key)?;
+        return values.get(position)?.parse().ok();
+    }
+    None
 }
 
 fn find_stat_value(parts: &[&str], key: &str) -> Option<u64> {
@@ -853,13 +949,13 @@ pub fn get_nat_rules() -> Result<NatTable, EthError> {
     }
 
     // Also try iptables (for Tailscale, older systems, etc.)
-    for cmd in ["iptables", "ip6tables"] {
+    for (cmd, family) in [("iptables", "ip"), ("ip6tables", "ip6")] {
         let output = Command::new(cmd).args(["-t", "nat", "-S"]).output();
 
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                parse_iptables_nat(&stdout, &mut table);
+                parse_iptables_nat(&stdout, family, &mut table);
                 successful_backends += 1;
             }
             Ok(out) => {
@@ -882,15 +978,36 @@ pub fn get_nat_rules() -> Result<NatTable, EthError> {
     }
 
     // iptables-nft may expose the same rule through both commands.
-    let mut unique = Vec::with_capacity(table.rules.len());
+    let mut unique: Vec<NatRule> = Vec::with_capacity(table.rules.len());
     for rule in table.rules.drain(..) {
-        if !unique.contains(&rule) {
+        if let Some(existing) = unique
+            .iter_mut()
+            .find(|existing| same_nat_rule(existing, &rule))
+        {
+            existing.packets = existing.packets.max(rule.packets);
+            existing.bytes = existing.bytes.max(rule.bytes);
+        } else {
             unique.push(rule);
         }
     }
     table.rules = unique;
 
     Ok(table)
+}
+
+fn same_nat_rule(left: &NatRule, right: &NatRule) -> bool {
+    left.family == right.family
+        && left.chain == right.chain
+        && left.nat_type == right.nat_type
+        && left.source == right.source
+        && left.destination == right.destination
+        && left.protocol == right.protocol
+        && left.dport == right.dport
+        && left.sport == right.sport
+        && left.to_source == right.to_source
+        && left.to_destination == right.to_destination
+        && left.interface_in == right.interface_in
+        && left.interface_out == right.interface_out
 }
 
 /// Parse nftables JSON output to extract NAT rules.
@@ -911,6 +1028,10 @@ fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthEr
     // First pass: collect chain information (for hook/type context)
     let mut chain_info: std::collections::HashMap<(String, String, String), NftChainInfo> =
         std::collections::HashMap::new();
+    let mut table_chains: std::collections::HashMap<
+        (String, String),
+        std::collections::HashSet<String>,
+    > = std::collections::HashMap::new();
     let mut nat_tables = std::collections::HashSet::new();
 
     for item in nftables {
@@ -936,6 +1057,10 @@ fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthEr
                     hook: hook.to_string(),
                 },
             );
+            table_chains
+                .entry((family.to_string(), table_name.to_string()))
+                .or_default()
+                .insert(chain_name.to_string());
         }
     }
 
@@ -961,7 +1086,14 @@ fn parse_nftables_json(json_str: &str, table: &mut NatTable) -> Result<(), EthEr
             ));
 
             if let Some(exprs) = rule.get("expr").and_then(|v| v.as_array()) {
-                if let Some(nat_rule) = parse_nft_rule_exprs(chain_name, exprs, info) {
+                let Some(known_chains) =
+                    table_chains.get(&(family.to_string(), table_name.to_string()))
+                else {
+                    continue;
+                };
+                if let Some(nat_rule) =
+                    parse_nft_rule_exprs(family, chain_name, exprs, info, known_chains)
+                {
                     table.rules.push(nat_rule);
                 }
             }
@@ -980,9 +1112,11 @@ struct NftChainInfo {
 
 /// Parse nftables rule expressions to extract NAT information.
 fn parse_nft_rule_exprs(
+    family: &str,
     chain: &str,
     exprs: &[serde_json::Value],
     _chain_info: Option<&NftChainInfo>,
+    known_chains: &std::collections::HashSet<String>,
 ) -> Option<NatRule> {
     let mut nat_type: Option<NatType> = None;
     let mut to_addr: Option<String> = None;
@@ -1023,6 +1157,9 @@ fn parse_nft_rule_exprs(
                     Some("MASQUERADE") => nat_type = Some(NatType::Masquerade),
                     Some("SNAT") => nat_type = Some(NatType::Snat),
                     Some("DNAT") => nat_type = Some(NatType::Dnat),
+                    Some(target) if known_chains.contains(target) => {
+                        nat_type = Some(NatType::Jump(target.to_string()))
+                    }
                     _ => {}
                 }
             }
@@ -1058,6 +1195,7 @@ fn parse_nft_rule_exprs(
     let nat_type = nat_type?;
 
     Some(NatRule {
+        family: family.to_string(),
         chain: chain.to_string(),
         nat_type: nat_type.clone(),
         source,
@@ -1199,7 +1337,7 @@ fn proto_num_to_name(num: u64) -> String {
     }
 }
 
-fn parse_iptables_nat(output: &str, table: &mut NatTable) {
+fn parse_iptables_nat(output: &str, family: &str, table: &mut NatTable) {
     let declared_chains: std::collections::HashSet<&str> = output
         .lines()
         .filter_map(|line| line.trim().strip_prefix("-N "))
@@ -1323,6 +1461,7 @@ fn parse_iptables_nat(output: &str, table: &mut NatTable) {
 
         if let Some(nt) = nat_type {
             table.rules.push(NatRule {
+                family: family.to_string(),
                 chain,
                 nat_type: nt,
                 source,
@@ -1362,15 +1501,38 @@ mod tests {
     }
 
     #[test]
+    fn conntrack_counters_are_summed_across_cpus() {
+        let counters = parse_conntrack_counters(
+            "entries insert_failed drop early_drop\n00000001 00000002 00000003 00000004\n00000001 00000005 00000006 00000007\n",
+        );
+        assert_eq!(counters, (Some(7), Some(9), Some(11)));
+    }
+
+    #[test]
+    fn tcp_listen_failures_are_parsed_from_netstat() {
+        let netstat = "TcpExt: SyncookiesSent ListenOverflows ListenDrops\nTcpExt: 1 2 3\n";
+        assert_eq!(
+            parse_netstat_value(netstat, "TcpExt:", "ListenOverflows"),
+            Some(2)
+        );
+        assert_eq!(
+            parse_netstat_value(netstat, "TcpExt:", "ListenDrops"),
+            Some(3)
+        );
+    }
+
+    #[test]
     fn iptables_only_classifies_declared_chains_as_jumps() {
         let mut table = NatTable::default();
         parse_iptables_nat(
             "-N CUSTOM\n-A PREROUTING -j REDIRECT --to-ports 8080\n-A PREROUTING -j CUSTOM\n",
+            "ip",
             &mut table,
         );
 
         assert_eq!(table.rules.len(), 1);
         assert_eq!(table.rules[0].nat_type, NatType::Jump("CUSTOM".into()));
+        assert_eq!(table.rules[0].family, "ip");
     }
 
     #[test]
@@ -1387,5 +1549,53 @@ mod tests {
 
         assert_eq!(table.rules.len(), 1);
         assert_eq!(table.rules[0].nat_type, NatType::Jump("CUSTOM".into()));
+    }
+
+    #[test]
+    fn nft_xtables_custom_chain_and_masquerade_are_reported() {
+        let mut table = NatTable::default();
+        parse_nftables_json(
+            r#"{"nftables":[
+                {"chain":{"family":"ip","table":"nat","name":"POSTROUTING","type":"nat","hook":"postrouting"}},
+                {"chain":{"family":"ip","table":"nat","name":"ts-postrouting"}},
+                {"rule":{"family":"ip","table":"nat","chain":"POSTROUTING","expr":[{"counter":{"packets":10,"bytes":600}},{"xt":{"type":"target","name":"ts-postrouting"}}]}},
+                {"rule":{"family":"ip","table":"nat","chain":"ts-postrouting","expr":[{"counter":{"packets":5,"bytes":300}},{"xt":{"type":"target","name":"MASQUERADE"}}]}}
+            ]}"#,
+            &mut table,
+        )
+        .unwrap();
+
+        assert_eq!(table.rules.len(), 2);
+        assert_eq!(
+            table.rules[0].nat_type,
+            NatType::Jump("ts-postrouting".into())
+        );
+        assert_eq!(table.rules[1].nat_type, NatType::Masquerade);
+        assert_eq!(table.rules[1].chain, "ts-postrouting");
+    }
+
+    #[test]
+    fn nat_rule_identity_ignores_backend_counter_differences() {
+        let first = NatRule {
+            family: "ip".into(),
+            chain: "ts-postrouting".into(),
+            nat_type: NatType::Masquerade,
+            source: None,
+            destination: None,
+            protocol: None,
+            dport: None,
+            sport: None,
+            to_source: None,
+            to_destination: None,
+            interface_in: None,
+            interface_out: None,
+            packets: 5,
+            bytes: 300,
+        };
+        let mut second = first.clone();
+        second.packets = 0;
+        second.bytes = 0;
+
+        assert!(same_nat_rule(&first, &second));
     }
 }

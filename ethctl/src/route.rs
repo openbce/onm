@@ -1,6 +1,8 @@
 use comfy_table::{presets::UTF8_FULL, Table};
 use libonm::eth::{self, EthError};
 
+use crate::path::interface_paths;
+
 pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
     if ipv4_only && ipv6_only {
         return Err(EthError::InvalidConfig(
@@ -8,6 +10,8 @@ pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
         ));
     }
     let routes = eth::get_routes().await?;
+    let interfaces = eth::list_interfaces()?;
+    let paths = interface_paths(&interfaces);
 
     let show_ipv4 = !ipv6_only;
     let show_ipv6 = !ipv4_only;
@@ -19,6 +23,7 @@ pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
         "Destination",
         "Gateway",
         "Interface",
+        "Path",
         "Metric",
         "Protocol",
         "Scope",
@@ -32,6 +37,7 @@ pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
                 route.destination.clone(),
                 route.gateway.clone().unwrap_or("-".to_string()),
                 route.interface.clone().unwrap_or("-".to_string()),
+                route_path(route, &paths),
                 route
                     .metric
                     .map(|m| m.to_string())
@@ -50,6 +56,7 @@ pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
                 route.destination.clone(),
                 route.gateway.clone().unwrap_or("-".to_string()),
                 route.interface.clone().unwrap_or("-".to_string()),
+                route_path(route, &paths),
                 route
                     .metric
                     .map(|m| m.to_string())
@@ -68,4 +75,47 @@ pub async fn run(ipv4_only: bool, ipv6_only: bool) -> Result<(), EthError> {
     }
 
     Ok(())
+}
+
+fn route_path(
+    route: &libonm::eth::RouteEntry,
+    interface_paths: &std::collections::HashMap<String, String>,
+) -> String {
+    let mut components = vec![route.destination.clone()];
+    if let Some(gateway) = &route.gateway {
+        components.push(format!("via {gateway}"));
+    }
+    if let Some(interface) = &route.interface {
+        components.push(
+            interface_paths
+                .get(interface)
+                .cloned()
+                .unwrap_or_else(|| interface.clone()),
+        );
+    }
+    components.join(" → ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn combines_route_and_interface_hierarchy() {
+        let route = libonm::eth::RouteEntry {
+            destination: "10.0.0.0/24".into(),
+            gateway: Some("192.0.2.1".into()),
+            interface: Some("eth0".into()),
+            ..Default::default()
+        };
+        let paths = std::collections::HashMap::from([(
+            "eth0".to_string(),
+            "eth0 → bond0 → br0".to_string(),
+        )]);
+
+        assert_eq!(
+            route_path(&route, &paths),
+            "10.0.0.0/24 → via 192.0.2.1 → eth0 → bond0 → br0"
+        );
+    }
 }

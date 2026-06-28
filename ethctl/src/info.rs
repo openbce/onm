@@ -48,8 +48,8 @@ pub enum BoundType {
     Min,
     /// Current value should be <= suggested (e.g., timeouts, retries)
     Max,
-    /// Current two-value interval should cover the suggested interval.
-    Range,
+    /// Ephemeral range must avoid lower service ports and provide enough ports.
+    PortRange,
 }
 
 impl BoundType {
@@ -57,7 +57,7 @@ impl BoundType {
         match self {
             BoundType::Min => ">= ",
             BoundType::Max => "<= ",
-            BoundType::Range => "covers ",
+            BoundType::PortRange => "safe range >= ",
         }
     }
 
@@ -67,7 +67,7 @@ impl BoundType {
             Some(val) => match self {
                 BoundType::Min => val >= suggested,
                 BoundType::Max => val <= suggested,
-                BoundType::Range => false,
+                BoundType::PortRange => false,
             },
         }
     }
@@ -92,8 +92,12 @@ impl BoundType {
         match self {
             BoundType::Min => current.iter().zip(suggested).all(|(a, b)| *a >= b),
             BoundType::Max => current.iter().zip(suggested).all(|(a, b)| *a <= b),
-            BoundType::Range => {
-                current.len() == 2 && current[0] <= suggested[0] && current[1] >= suggested[1]
+            BoundType::PortRange => {
+                current.len() == 2
+                    && suggested[1] >= suggested[0]
+                    && current[0] >= suggested[0]
+                    && current[1] >= current[0]
+                    && current[1] - current[0] >= suggested[1] - suggested[0]
             }
         }
     }
@@ -115,48 +119,31 @@ impl OutputFormat {
 pub struct SuggestedValues {
     // Connection tracking
     pub conntrack_max: u64,
-    pub conntrack_buckets: u64,
     pub conntrack_tcp_timeout_established: u64,
     pub conntrack_tcp_timeout_time_wait: u64,
     pub conntrack_tcp_timeout_close_wait: u64,
     pub conntrack_tcp_timeout_fin_wait: u64,
     pub conntrack_tcp_max_retrans: u64,
+    pub conntrack_udp_timeout: u64,
+    pub conntrack_udp_timeout_stream: u64,
     // Socket buffers
     pub rmem_max: u64,
     pub wmem_max: u64,
-    pub rmem_default: u64,
-    pub wmem_default: u64,
     pub tcp_rmem: &'static str,
     pub tcp_wmem: &'static str,
     pub netdev_max_backlog: u64,
     pub udp_rmem_min: u64,
-    pub udp_wmem_min: u64,
-    pub udp_mem: &'static str,
     // TCP settings
     pub somaxconn: u64,
     pub tcp_max_syn_backlog: u64,
-    pub tcp_tw_reuse: u64,
     pub tcp_fin_timeout: u64,
     pub tcp_keepalive_time: u64,
     pub tcp_keepalive_probes: u64,
     pub tcp_keepalive_intvl: u64,
     pub ip_local_port_range: &'static str,
-    // ARP/Neighbor
-    pub arp_gc_thresh1: u64,
-    pub arp_gc_thresh2: u64,
-    pub arp_gc_thresh3: u64,
-    pub arp_ignore: u64,
-    pub arp_announce: u64,
-    // RP filter
-    pub rp_filter: u64,
     // Interface settings (ip link)
     pub txqueuelen: u64,
     pub mtu: u64,
-    pub gso_max_size: u64,
-    pub gso_max_segs: u64,
-    pub gro_max_size: u64,
-    pub tso_max_size: u64,
-    pub tso_max_segs: u64,
     // Ethtool settings
     pub ring_rx: u64,
     pub ring_tx: u64,
@@ -175,53 +162,37 @@ impl SuggestedValues {
         }
     }
 
-    // Control plane: handles API server, etcd, all node connections
-    // Needs: massive conntrack, huge ARP tables, high socket buffers
+    // Control plane: prioritizes API server and etcd throughput. Conntrack capacity
+    // is CPU-derived because node role and cluster size do not determine flow count.
     fn control_plane() -> Self {
+        let conntrack_max = suggested_conntrack_max();
         Self {
-            conntrack_max: 4_194_304,     // 4M - API server sees all cluster traffic
-            conntrack_buckets: 1_048_576, // max/4
+            conntrack_max,
             conntrack_tcp_timeout_established: 86400,
             conntrack_tcp_timeout_time_wait: 60,
-            conntrack_tcp_timeout_close_wait: 60,
+            conntrack_tcp_timeout_close_wait: 3600,
             conntrack_tcp_timeout_fin_wait: 60,
             conntrack_tcp_max_retrans: 3,
+            conntrack_udp_timeout: 30,
+            conntrack_udp_timeout_stream: 300,
 
             rmem_max: 268_435_456, // 256MB - etcd/API server traffic
             wmem_max: 268_435_456,
-            rmem_default: 33_554_432, // 32MB
-            wmem_default: 33_554_432,
             tcp_rmem: "4096 2097152 268435456",
             tcp_wmem: "4096 2097152 268435456",
             netdev_max_backlog: 50000,
             udp_rmem_min: 16_384,
-            udp_wmem_min: 16_384,
-            udp_mem: "1048576 4194304 16777216",
 
             somaxconn: 65535,
             tcp_max_syn_backlog: 65535,
-            tcp_tw_reuse: 1,
             tcp_fin_timeout: 15,
             tcp_keepalive_time: 600,
             tcp_keepalive_probes: 3,
             tcp_keepalive_intvl: 15,
-            ip_local_port_range: "1024 65535",
-
-            arp_gc_thresh1: 16384, // Must hold all 10k node entries
-            arp_gc_thresh2: 65536,
-            arp_gc_thresh3: 131072,
-            arp_ignore: 1,
-            arp_announce: 2,
-
-            rp_filter: 0,
+            ip_local_port_range: "32768 60999",
 
             txqueuelen: 10000, // High queue for API server traffic bursts
             mtu: 9000,         // Jumbo frames (requires network support)
-            gso_max_size: 65536,
-            gso_max_segs: 65535,
-            gro_max_size: 65536,
-            tso_max_size: 524280, // ~512KB for high throughput
-            tso_max_segs: 65535,
 
             ring_rx: 4096,
             ring_tx: 4096,
@@ -233,53 +204,37 @@ impl SuggestedValues {
         }
     }
 
-    // Worker: handles pod traffic, moderate connections
-    // Needs: reasonable conntrack, standard ARP, good buffers
+    // Worker: handles pod traffic. Conntrack capacity is CPU-derived to match the
+    // kube-proxy default rather than assuming every worker has the same hardware.
     fn worker() -> Self {
+        let conntrack_max = suggested_conntrack_max();
         Self {
-            conntrack_max: 1_048_576, // 1M - per-node workload
-            conntrack_buckets: 262_144,
+            conntrack_max,
             conntrack_tcp_timeout_established: 86400,
             conntrack_tcp_timeout_time_wait: 60,
-            conntrack_tcp_timeout_close_wait: 60,
+            conntrack_tcp_timeout_close_wait: 3600,
             conntrack_tcp_timeout_fin_wait: 60,
             conntrack_tcp_max_retrans: 3,
+            conntrack_udp_timeout: 30,
+            conntrack_udp_timeout_stream: 300,
 
             rmem_max: 134_217_728, // 128MB
             wmem_max: 134_217_728,
-            rmem_default: 16_777_216, // 16MB
-            wmem_default: 16_777_216,
             tcp_rmem: "4096 1048576 134217728",
             tcp_wmem: "4096 1048576 134217728",
             netdev_max_backlog: 30000,
             udp_rmem_min: 16_384,
-            udp_wmem_min: 16_384,
-            udp_mem: "786432 2097152 8388608",
 
             somaxconn: 32768,
             tcp_max_syn_backlog: 32768,
-            tcp_tw_reuse: 1,
             tcp_fin_timeout: 15,
             tcp_keepalive_time: 600,
             tcp_keepalive_probes: 3,
             tcp_keepalive_intvl: 15,
-            ip_local_port_range: "1024 65535",
-
-            arp_gc_thresh1: 4096, // Local subnet typically
-            arp_gc_thresh2: 8192,
-            arp_gc_thresh3: 16384,
-            arp_ignore: 1,
-            arp_announce: 2,
-
-            rp_filter: 0,
+            ip_local_port_range: "32768 60999",
 
             txqueuelen: 5000, // Moderate queue for pod traffic
             mtu: 9000,        // Jumbo frames (requires network support)
-            gso_max_size: 65536,
-            gso_max_segs: 65535,
-            gro_max_size: 65536,
-            tso_max_size: 262144, // 256KB for worker nodes
-            tso_max_segs: 65535,
 
             ring_rx: 2048,
             ring_tx: 2048,
@@ -290,6 +245,17 @@ impl SuggestedValues {
             offload_gro: true,
         }
     }
+}
+
+fn conntrack_max_for_cores(cores: u64) -> u64 {
+    cores.saturating_mul(32_768).max(131_072)
+}
+
+fn suggested_conntrack_max() -> u64 {
+    let cores = std::thread::available_parallelism()
+        .map(|value| value.get() as u64)
+        .unwrap_or(1);
+    conntrack_max_for_cores(cores)
 }
 
 pub fn run(profile_str: &str, output: Option<&str>, backup: Option<&str>) -> Result<(), EthError> {
@@ -327,12 +293,12 @@ pub fn run(profile_str: &str, output: Option<&str>, backup: Option<&str>) -> Res
     println!("{table}");
     println!();
 
-    print_interfaces_table(&interfaces, &s);
+    print_interfaces_table(&interfaces);
 
     Ok(())
 }
 
-fn print_interfaces_table(interfaces: &[eth::EthInterface], s: &SuggestedValues) {
+fn print_interfaces_table(interfaces: &[eth::EthInterface]) {
     let mut table = Table::new();
     table.load_preset(NOTHING);
 
@@ -351,8 +317,8 @@ fn print_interfaces_table(interfaces: &[eth::EthInterface], s: &SuggestedValues)
     ]);
 
     for iface in interfaces {
-        let mtu_str = format_with_suggested(iface.mtu as u64, s.mtu);
-        let txq_str = format_with_suggested(iface.txqueuelen as u64, s.txqueuelen);
+        let mtu_str = iface.mtu.to_string();
+        let txq_str = iface.txqueuelen.to_string();
         let speed_str = iface
             .speed
             .map(|sp| format!("{}", sp))
@@ -379,14 +345,6 @@ fn print_interfaces_table(interfaces: &[eth::EthInterface], s: &SuggestedValues)
     }
 
     println!("{table}");
-}
-
-fn format_with_suggested(current: u64, suggested: u64) -> String {
-    if current == suggested {
-        current.to_string()
-    } else {
-        format!("{} ({})", current, suggested)
-    }
 }
 
 #[allow(dead_code)]
@@ -418,25 +376,33 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         s.conntrack_max,
         Min,
     );
-    add_row(
-        table,
-        "  nf_conntrack_buckets",
-        sysctl.conntrack.buckets,
-        s.conntrack_buckets,
-        Min,
-    );
+    add_info_row(table, "  nf_conntrack_buckets", sysctl.conntrack.buckets);
     add_row(
         table,
         "  nf_conntrack_tcp_timeout_established",
         sysctl.conntrack.tcp_timeout_established,
         s.conntrack_tcp_timeout_established,
-        Min,
+        Max,
     );
     add_row(
         table,
         "  nf_conntrack_tcp_timeout_time_wait",
         sysctl.conntrack.tcp_timeout_time_wait,
         s.conntrack_tcp_timeout_time_wait,
+        Max,
+    );
+    add_row(
+        table,
+        "  nf_conntrack_udp_timeout",
+        sysctl.conntrack.udp_timeout,
+        s.conntrack_udp_timeout,
+        Max,
+    );
+    add_row(
+        table,
+        "  nf_conntrack_udp_timeout_stream",
+        sysctl.conntrack.udp_timeout_stream,
+        s.conntrack_udp_timeout_stream,
         Max,
     );
     add_row(
@@ -476,19 +442,15 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         s.wmem_max,
         Min,
     );
-    add_row_bytes(
+    add_info_row_bytes(
         table,
         "  net.core.rmem_default",
         sysctl.socket_buffer.rmem_default,
-        s.rmem_default,
-        Min,
     );
-    add_row_bytes(
+    add_info_row_bytes(
         table,
         "  net.core.wmem_default",
         sysctl.socket_buffer.wmem_default,
-        s.wmem_default,
-        Min,
     );
     add_row_tcp_mem(
         table,
@@ -511,6 +473,16 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         s.netdev_max_backlog,
         Min,
     );
+    add_info_row(
+        table,
+        "  net.core.netdev_budget",
+        sysctl.socket_buffer.netdev_budget,
+    );
+    add_info_row(
+        table,
+        "  net.core.netdev_budget_usecs",
+        sysctl.socket_buffer.netdev_budget_usecs,
+    );
     add_row_bytes(
         table,
         "  net.ipv4.udp_rmem_min",
@@ -518,19 +490,15 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         s.udp_rmem_min,
         Min,
     );
-    add_row_bytes(
+    add_info_row_bytes(
         table,
-        "  net.ipv4.udp_wmem_min",
+        "  net.ipv4.udp_wmem_min (unused)",
         sysctl.udp.wmem_min,
-        s.udp_wmem_min,
-        Min,
     );
-    add_row_tcp_mem(
+    add_info_row_str(
         table,
-        "  net.ipv4.udp_mem",
+        "  net.ipv4.udp_mem (pages)",
         sysctl.udp.udp_mem.clone(),
-        s.udp_mem,
-        Min,
     );
 
     add_section(table, "TCP Settings");
@@ -548,13 +516,7 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         s.tcp_max_syn_backlog,
         Min,
     );
-    add_row(
-        table,
-        "  net.ipv4.tcp_tw_reuse",
-        sysctl.tcp.tw_reuse,
-        s.tcp_tw_reuse,
-        Min,
-    );
+    add_info_row(table, "  net.ipv4.tcp_tw_reuse", sysctl.tcp.tw_reuse);
     add_row(
         table,
         "  net.ipv4.tcp_fin_timeout",
@@ -588,61 +550,70 @@ fn add_sysctl_rows(table: &mut Table, sysctl: &eth::NetworkSysctl, s: &Suggested
         "  net.ipv4.ip_local_port_range",
         sysctl.tcp.ip_local_port_range.clone(),
         s.ip_local_port_range,
-        BoundType::Range,
+        BoundType::PortRange,
+    );
+    add_info_row_str(
+        table,
+        "  net.ipv4.ip_local_reserved_ports",
+        sysctl.tcp.ip_local_reserved_ports.clone(),
     );
 
     add_section(table, "ARP / Neighbor Table");
-    add_row(
+    add_info_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh1",
         sysctl.arp.gc_thresh1,
-        s.arp_gc_thresh1,
-        Min,
     );
-    add_row(
+    add_info_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh2",
         sysctl.arp.gc_thresh2,
-        s.arp_gc_thresh2,
-        Min,
     );
-    add_row(
+    add_info_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh3",
         sysctl.arp.gc_thresh3,
-        s.arp_gc_thresh3,
-        Min,
     );
-    add_row(
+    add_info_row(
         table,
         "  net.ipv4.conf.all.arp_ignore",
         sysctl.arp.arp_ignore,
-        s.arp_ignore,
-        Min,
     );
-    add_row(
+    add_info_row(
         table,
         "  net.ipv4.conf.all.arp_announce",
         sysctl.arp.arp_announce,
-        s.arp_announce,
-        Min,
+    );
+    add_info_row(
+        table,
+        "  net.ipv6.neigh.default.gc_thresh1",
+        sysctl.arp.ipv6_gc_thresh1,
+    );
+    add_info_row(
+        table,
+        "  net.ipv6.neigh.default.gc_thresh2",
+        sysctl.arp.ipv6_gc_thresh2,
+    );
+    add_info_row(
+        table,
+        "  net.ipv6.neigh.default.gc_thresh3",
+        sysctl.arp.ipv6_gc_thresh3,
     );
 
     add_section(table, "Reverse Path Filtering");
-    add_row(
-        table,
-        "  net.ipv4.conf.all.rp_filter",
-        sysctl.rp_filter.all,
-        s.rp_filter,
-        Max,
-    );
-    add_row(
+    add_info_row(table, "  net.ipv4.conf.all.rp_filter", sysctl.rp_filter.all);
+    add_info_row(
         table,
         "  net.ipv4.conf.default.rp_filter",
         sysctl.rp_filter.default,
-        s.rp_filter,
-        Max,
     );
+    for (name, value) in &sysctl.rp_filter.interfaces {
+        add_info_row(
+            table,
+            &format!("  net.ipv4.conf.{name}.rp_filter"),
+            Some(*value),
+        );
+    }
 }
 
 pub async fn print_link_tables(name: &str, profile: TuningProfile) -> Result<(), EthError> {
@@ -662,47 +633,17 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) -> Result<(),
     add_section(&mut table, "IP Link Settings");
     {
         let l = &link;
-        add_row_u32_bytes(&mut table, "  mtu", l.mtu, s.mtu as u32);
+        add_row_u32_bytes(&mut table, "  mtu", l.mtu, 0);
         add_row_u32_bytes(&mut table, "  min_mtu", l.min_mtu, 0);
         add_row_u32_bytes(&mut table, "  max_mtu", l.max_mtu, 0);
-        add_row_u32(
-            &mut table,
-            "  txqueuelen",
-            l.txqueuelen,
-            s.txqueuelen as u32,
-        );
+        add_row_u32(&mut table, "  txqueuelen", l.txqueuelen, 0);
         add_row_u32(&mut table, "  num_tx_queues", l.num_tx_queues, 0);
         add_row_u32(&mut table, "  num_rx_queues", l.num_rx_queues, 0);
-        add_row_u32_bytes(
-            &mut table,
-            "  gso_max_size",
-            l.gso_max_size,
-            s.gso_max_size as u32,
-        );
-        add_row_u32(
-            &mut table,
-            "  gso_max_segs",
-            l.gso_max_segs,
-            s.gso_max_segs as u32,
-        );
-        add_row_u32_bytes(
-            &mut table,
-            "  gro_max_size",
-            l.gro_max_size,
-            s.gro_max_size as u32,
-        );
-        add_row_u32_bytes(
-            &mut table,
-            "  tso_max_size",
-            l.tso_max_size,
-            s.tso_max_size as u32,
-        );
-        add_row_u32(
-            &mut table,
-            "  tso_max_segs",
-            l.tso_max_segs,
-            s.tso_max_segs as u32,
-        );
+        add_row_u32_bytes(&mut table, "  gso_max_size", l.gso_max_size, 0);
+        add_row_u32(&mut table, "  gso_max_segs", l.gso_max_segs, 0);
+        add_row_u32_bytes(&mut table, "  gro_max_size", l.gro_max_size, 0);
+        add_row_u32_bytes(&mut table, "  tso_max_size", l.tso_max_size, 0);
+        add_row_u32(&mut table, "  tso_max_segs", l.tso_max_segs, 0);
         add_row_str(&mut table, "  qdisc", l.qdisc.clone(), "-", BoundType::Min);
         add_row_u32(&mut table, "  group", l.group, 0);
     }
@@ -710,25 +651,17 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) -> Result<(),
     add_section(&mut table, "Ethtool Settings");
     {
         let e = &ethtool;
-        add_row_u32(&mut table, "  ring_rx", e.ring.rx, s.ring_rx as u32);
+        let ring_rx = clamp_to_device_max(s.ring_rx as u32, e.ring.rx_max);
+        let ring_tx = clamp_to_device_max(s.ring_tx as u32, e.ring.tx_max);
+        add_row_u32(&mut table, "  ring_rx", e.ring.rx, ring_rx);
         add_row_u32(&mut table, "  ring_rx_max", e.ring.rx_max, 0);
-        add_row_u32(&mut table, "  ring_tx", e.ring.tx, s.ring_tx as u32);
+        add_row_u32(&mut table, "  ring_tx", e.ring.tx, ring_tx);
         add_row_u32(&mut table, "  ring_tx_max", e.ring.tx_max, 0);
-        add_row_u32(
-            &mut table,
-            "  coalesce_rx_usecs",
-            e.coalesce.rx_usecs,
-            s.coalesce_rx_usecs as u32,
-        );
-        add_row_u32(
-            &mut table,
-            "  coalesce_tx_usecs",
-            e.coalesce.tx_usecs,
-            s.coalesce_tx_usecs as u32,
-        );
-        add_row_bool(&mut table, "  offload_tso", e.offload.tso, s.offload_tso);
-        add_row_bool(&mut table, "  offload_gso", e.offload.gso, s.offload_gso);
-        add_row_bool(&mut table, "  offload_gro", e.offload.gro, s.offload_gro);
+        add_row_u32(&mut table, "  coalesce_rx_usecs", e.coalesce.rx_usecs, 0);
+        add_row_u32(&mut table, "  coalesce_tx_usecs", e.coalesce.tx_usecs, 0);
+        add_info_row_bool(&mut table, "  offload_tso", e.offload.tso);
+        add_info_row_bool(&mut table, "  offload_gso", e.offload.gso);
+        add_info_row_bool(&mut table, "  offload_gro", e.offload.gro);
     }
 
     println!("{table}");
@@ -802,14 +735,22 @@ fn add_row_u32_bytes(table: &mut Table, name: &str, value: Option<u32>, suggeste
     ]);
 }
 
-fn add_row_bool(table: &mut Table, name: &str, value: Option<bool>, suggested: bool) {
+fn add_info_row_bool(table: &mut Table, name: &str, value: Option<bool>) {
     table.add_row(vec![
         name.to_string(),
         value
             .map(|v| if v { "on" } else { "off" }.to_string())
             .unwrap_or("-".to_string()),
-        if suggested { "on" } else { "off" }.to_string(),
+        "observe".to_string(),
     ]);
+}
+
+fn clamp_to_device_max(target: u32, maximum: Option<u32>) -> u32 {
+    maximum.map_or(target, |value| target.min(value))
+}
+
+fn safe_ring_target(target: u32, maximum: Option<u32>, current: Option<u32>) -> Option<u32> {
+    maximum.map(|value| target.min(value)).or(current)
 }
 
 fn add_row(table: &mut Table, name: &str, value: Option<u64>, suggested: u64, bound: BoundType) {
@@ -822,6 +763,30 @@ fn add_row(table: &mut Table, name: &str, value: Option<u64>, suggested: u64, bo
         name.to_string(),
         value.map(|v| v.to_string()).unwrap_or("-".to_string()),
         suggested_str,
+    ]);
+}
+
+fn add_info_row(table: &mut Table, name: &str, value: Option<u64>) {
+    table.add_row(vec![
+        name.to_string(),
+        value.map(|v| v.to_string()).unwrap_or("-".to_string()),
+        "observe".to_string(),
+    ]);
+}
+
+fn add_info_row_bytes(table: &mut Table, name: &str, value: Option<u64>) {
+    table.add_row(vec![
+        name.to_string(),
+        value.map(format_size).unwrap_or("-".to_string()),
+        "observe".to_string(),
+    ]);
+}
+
+fn add_info_row_str(table: &mut Table, name: &str, value: Option<String>) {
+    table.add_row(vec![
+        name.to_string(),
+        value.unwrap_or("-".to_string()),
+        "observe".to_string(),
     ]);
 }
 
@@ -913,6 +878,14 @@ pub fn generate_backup_output(format: OutputFormat) {
             "net.netfilter.nf_conntrack_tcp_max_retrans",
             sysctl.conntrack.tcp_max_retrans,
         ),
+        (
+            "net.netfilter.nf_conntrack_udp_timeout",
+            sysctl.conntrack.udp_timeout,
+        ),
+        (
+            "net.netfilter.nf_conntrack_udp_timeout_stream",
+            sysctl.conntrack.udp_timeout_stream,
+        ),
         ("net.core.rmem_max", sysctl.socket_buffer.rmem_max),
         ("net.core.wmem_max", sysctl.socket_buffer.wmem_max),
         ("net.core.rmem_default", sysctl.socket_buffer.rmem_default),
@@ -920,6 +893,11 @@ pub fn generate_backup_output(format: OutputFormat) {
         (
             "net.core.netdev_max_backlog",
             sysctl.socket_buffer.netdev_max_backlog,
+        ),
+        ("net.core.netdev_budget", sysctl.socket_buffer.netdev_budget),
+        (
+            "net.core.netdev_budget_usecs",
+            sysctl.socket_buffer.netdev_budget_usecs,
         ),
         ("net.core.somaxconn", sysctl.tcp.somaxconn),
         ("net.ipv4.tcp_max_syn_backlog", sysctl.tcp.max_syn_backlog),
@@ -945,6 +923,10 @@ pub fn generate_backup_output(format: OutputFormat) {
         (
             "net.ipv4.ip_local_port_range",
             sysctl.tcp.ip_local_port_range.clone(),
+        ),
+        (
+            "net.ipv4.ip_local_reserved_ports",
+            sysctl.tcp.ip_local_reserved_ports.clone(),
         ),
         ("net.ipv4.udp_mem", sysctl.udp.udp_mem.clone()),
     ];
@@ -996,16 +978,10 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             Min,
         ),
         (
-            "net.netfilter.nf_conntrack_buckets",
-            s.conntrack_buckets,
-            sysctl.conntrack.buckets,
-            Min,
-        ),
-        (
             "net.netfilter.nf_conntrack_tcp_timeout_established",
             s.conntrack_tcp_timeout_established,
             sysctl.conntrack.tcp_timeout_established,
-            Min,
+            Max,
         ),
         (
             "net.netfilter.nf_conntrack_tcp_timeout_time_wait",
@@ -1032,6 +1008,18 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             Max,
         ),
         (
+            "net.netfilter.nf_conntrack_udp_timeout",
+            s.conntrack_udp_timeout,
+            sysctl.conntrack.udp_timeout,
+            Max,
+        ),
+        (
+            "net.netfilter.nf_conntrack_udp_timeout_stream",
+            s.conntrack_udp_timeout_stream,
+            sysctl.conntrack.udp_timeout_stream,
+            Max,
+        ),
+        (
             "net.core.rmem_max",
             s.rmem_max,
             sysctl.socket_buffer.rmem_max,
@@ -1041,18 +1029,6 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             "net.core.wmem_max",
             s.wmem_max,
             sysctl.socket_buffer.wmem_max,
-            Min,
-        ),
-        (
-            "net.core.rmem_default",
-            s.rmem_default,
-            sysctl.socket_buffer.rmem_default,
-            Min,
-        ),
-        (
-            "net.core.wmem_default",
-            s.wmem_default,
-            sysctl.socket_buffer.wmem_default,
             Min,
         ),
         (
@@ -1066,12 +1042,6 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             "net.ipv4.tcp_max_syn_backlog",
             s.tcp_max_syn_backlog,
             sysctl.tcp.max_syn_backlog,
-            Min,
-        ),
-        (
-            "net.ipv4.tcp_tw_reuse",
-            s.tcp_tw_reuse,
-            sysctl.tcp.tw_reuse,
             Min,
         ),
         (
@@ -1104,54 +1074,6 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             sysctl.udp.rmem_min,
             Min,
         ),
-        (
-            "net.ipv4.udp_wmem_min",
-            s.udp_wmem_min,
-            sysctl.udp.wmem_min,
-            Min,
-        ),
-        (
-            "net.ipv4.neigh.default.gc_thresh1",
-            s.arp_gc_thresh1,
-            sysctl.arp.gc_thresh1,
-            Min,
-        ),
-        (
-            "net.ipv4.neigh.default.gc_thresh2",
-            s.arp_gc_thresh2,
-            sysctl.arp.gc_thresh2,
-            Min,
-        ),
-        (
-            "net.ipv4.neigh.default.gc_thresh3",
-            s.arp_gc_thresh3,
-            sysctl.arp.gc_thresh3,
-            Min,
-        ),
-        (
-            "net.ipv4.conf.all.arp_ignore",
-            s.arp_ignore,
-            sysctl.arp.arp_ignore,
-            Min,
-        ),
-        (
-            "net.ipv4.conf.all.arp_announce",
-            s.arp_announce,
-            sysctl.arp.arp_announce,
-            Min,
-        ),
-        (
-            "net.ipv4.conf.all.rp_filter",
-            s.rp_filter,
-            sysctl.rp_filter.all,
-            Max,
-        ),
-        (
-            "net.ipv4.conf.default.rp_filter",
-            s.rp_filter,
-            sysctl.rp_filter.default,
-            Max,
-        ),
     ];
 
     let string_settings: Vec<(&str, &str, Option<String>, BoundType)> = vec![
@@ -1171,13 +1093,7 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
             "net.ipv4.ip_local_port_range",
             s.ip_local_port_range,
             sysctl.tcp.ip_local_port_range.clone(),
-            BoundType::Range,
-        ),
-        (
-            "net.ipv4.udp_mem",
-            s.udp_mem,
-            sysctl.udp.udp_mem.clone(),
-            Min,
+            BoundType::PortRange,
         ),
     ];
 
@@ -1195,10 +1111,6 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
         )
         .collect();
 
-    let tso = if s.offload_tso { "on" } else { "off" };
-    let gso = if s.offload_gso { "on" } else { "off" };
-    let gro = if s.offload_gro { "on" } else { "off" };
-
     match format {
         OutputFormat::Cmd => {
             if needs_change.is_empty() {
@@ -1208,29 +1120,7 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                     println!("sysctl -w '{}={}'", key, value);
                 }
             }
-            println!();
-            println!("# Interface tuning (ip link)");
-            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
-            println!("    ip link set dev \"$iface\" txqueuelen {}", s.txqueuelen);
-            println!("    # MTU {} requires network-wide support", s.mtu);
-            println!("    # ip link set dev \"$iface\" mtu {}", s.mtu);
-            println!("done");
-            println!();
-            println!("# Ethtool tuning (ring buffers, coalesce, offloads)");
-            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
-            println!(
-                "    ethtool -G \"$iface\" rx {} tx {} 2>/dev/null || true",
-                s.ring_rx, s.ring_tx
-            );
-            println!(
-                "    ethtool -C \"$iface\" rx-usecs {} tx-usecs {} 2>/dev/null || true",
-                s.coalesce_rx_usecs, s.coalesce_tx_usecs
-            );
-            println!(
-                "    ethtool -K \"$iface\" tso {} gso {} gro {} 2>/dev/null || true",
-                tso, gso, gro
-            );
-            println!("done");
+            println!("# Device tuning is topology-specific; inspect one NIC with: ethctl link --name <iface>");
         }
         OutputFormat::Conf => {
             println!(
@@ -1247,18 +1137,7 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                 }
             }
             println!();
-            println!("# NOTE: Interface settings (not sysctl) - apply via script or systemd unit:");
-            println!("#   ip link set dev <iface> txqueuelen {}", s.txqueuelen);
-            println!(
-                "#   ip link set dev <iface> mtu {} (requires network support)",
-                s.mtu
-            );
-            println!("#   ethtool -G <iface> rx {} tx {}", s.ring_rx, s.ring_tx);
-            println!(
-                "#   ethtool -C <iface> rx-usecs {} tx-usecs {}",
-                s.coalesce_rx_usecs, s.coalesce_tx_usecs
-            );
-            println!("#   ethtool -K <iface> tso {} gso {} gro {}", tso, gso, gro);
+            println!("# Device tuning is intentionally omitted; MTU, queues, coalescing, and offloads depend on the NIC and CNI path.");
         }
         OutputFormat::Script => {
             println!("#!/bin/bash");
@@ -1279,33 +1158,8 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                 }
             }
             println!();
-            println!("# Interface tuning (ip link)");
-            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
-            println!("    ip link set dev \"$iface\" txqueuelen {}", s.txqueuelen);
-            println!(
-                "    # MTU {} requires network-wide jumbo frame support",
-                s.mtu
-            );
-            println!("    # ip link set dev \"$iface\" mtu {}", s.mtu);
-            println!("done");
-            println!();
-            println!("# Ethtool tuning (ring buffers, coalesce, offloads)");
-            println!("for iface in $(ls /sys/class/net | grep -E '^(eth|ens|eno|enp)'); do");
-            println!(
-                "    ethtool -G \"$iface\" rx {} tx {} 2>/dev/null || true",
-                s.ring_rx, s.ring_tx
-            );
-            println!(
-                "    ethtool -C \"$iface\" rx-usecs {} tx-usecs {} 2>/dev/null || true",
-                s.coalesce_rx_usecs, s.coalesce_tx_usecs
-            );
-            println!(
-                "    ethtool -K \"$iface\" tso {} gso {} gro {} 2>/dev/null || true",
-                tso, gso, gro
-            );
-            println!("done");
-            println!();
-            println!("echo 'Network tuning applied successfully'");
+            println!("# Device tuning is intentionally omitted; use ethctl link after validating the NIC and end-to-end path.");
+            println!("echo 'Network sysctl tuning applied successfully'");
         }
     }
 }
@@ -1319,6 +1173,9 @@ pub async fn generate_link_output(
 
     let s = SuggestedValues::for_profile(profile);
     let link = eth::get_link_settings(name).await?;
+    let ethtool = eth::get_ethtool_settings(name).await?;
+    let ring_rx = safe_ring_target(s.ring_rx as u32, ethtool.ring.rx_max, ethtool.ring.rx);
+    let ring_tx = safe_ring_target(s.ring_tx as u32, ethtool.ring.tx_max, ethtool.ring.tx);
 
     let tso = if s.offload_tso { "on" } else { "off" };
     let gso = if s.offload_gso { "on" } else { "off" };
@@ -1326,16 +1183,25 @@ pub async fn generate_link_output(
 
     match format {
         OutputFormat::Cmd => {
-            println!("ip link set dev {} txqueuelen {}", name, s.txqueuelen);
-            println!("# MTU {} requires network-wide jumbo frame support", s.mtu);
-            println!("# ip link set dev {} mtu {}", name, s.mtu);
-            println!();
-            println!("ethtool -G {} rx {} tx {}", name, s.ring_rx, s.ring_tx);
+            if let (Some(rx), Some(tx)) = (ring_rx, ring_tx) {
+                println!("ethtool -G {} rx {} tx {}", name, rx, tx);
+            }
             println!(
-                "ethtool -C {} rx-usecs {} tx-usecs {}",
+                "# MTU, TX queue length, coalescing, and offloads require workload/CNI validation."
+            );
+            println!(
+                "# Candidate only: ip link set dev {} txqueuelen {}",
+                name, s.txqueuelen
+            );
+            println!("# Candidate only: ip link set dev {} mtu {}", name, s.mtu);
+            println!(
+                "# Candidate only: ethtool -C {} rx-usecs {} tx-usecs {}",
                 name, s.coalesce_rx_usecs, s.coalesce_tx_usecs
             );
-            println!("ethtool -K {} tso {} gso {} gro {}", name, tso, gso, gro);
+            println!(
+                "# Candidate only: ethtool -K {} tso {} gso {} gro {}",
+                name, tso, gso, gro
+            );
 
             {
                 let l = &link;
@@ -1363,20 +1229,18 @@ pub async fn generate_link_output(
             );
             println!("# Apply via script or systemd unit");
             println!();
-            println!("# ip link settings:");
-            println!("ip link set dev {} txqueuelen {}", name, s.txqueuelen);
-            println!(
-                "# ip link set dev {} mtu {} (requires network-wide jumbo frame support)",
-                name, s.mtu
-            );
+            println!("# Device-dependent candidates (review before enabling):");
+            println!("# ip link set dev {} txqueuelen {}", name, s.txqueuelen);
+            println!("# ip link set dev {} mtu {}", name, s.mtu);
             println!();
-            println!("# ethtool settings:");
-            println!("ethtool -G {} rx {} tx {}", name, s.ring_rx, s.ring_tx);
+            if let (Some(rx), Some(tx)) = (ring_rx, ring_tx) {
+                println!("ethtool -G {} rx {} tx {}", name, rx, tx);
+            }
             println!(
-                "ethtool -C {} rx-usecs {} tx-usecs {}",
+                "# ethtool -C {} rx-usecs {} tx-usecs {}",
                 name, s.coalesce_rx_usecs, s.coalesce_tx_usecs
             );
-            println!("ethtool -K {} tso {} gso {} gro {}", name, tso, gso, gro);
+            println!("# ethtool -K {} tso {} gso {} gro {}", name, tso, gso, gro);
         }
         OutputFormat::Script => {
             println!("#!/bin/bash");
@@ -1390,20 +1254,21 @@ pub async fn generate_link_output(
             println!("set -e");
             println!("IFACE={}", name);
             println!();
-            println!("ip link set dev \"$IFACE\" txqueuelen {}", s.txqueuelen);
-            println!("# MTU {} requires network-wide jumbo frame support", s.mtu);
+            if let (Some(rx), Some(tx)) = (ring_rx, ring_tx) {
+                println!(
+                    "ethtool -G \"$IFACE\" rx {} tx {} 2>/dev/null || true",
+                    rx, tx
+                );
+            }
+            println!("# The remaining settings are candidates; uncomment only after path/workload validation.");
+            println!("# ip link set dev \"$IFACE\" txqueuelen {}", s.txqueuelen);
             println!("# ip link set dev \"$IFACE\" mtu {}", s.mtu);
-            println!();
             println!(
-                "ethtool -G \"$IFACE\" rx {} tx {} 2>/dev/null || true",
-                s.ring_rx, s.ring_tx
-            );
-            println!(
-                "ethtool -C \"$IFACE\" rx-usecs {} tx-usecs {} 2>/dev/null || true",
+                "# ethtool -C \"$IFACE\" rx-usecs {} tx-usecs {} 2>/dev/null || true",
                 s.coalesce_rx_usecs, s.coalesce_tx_usecs
             );
             println!(
-                "ethtool -K \"$IFACE\" tso {} gso {} gro {} 2>/dev/null || true",
+                "# ethtool -K \"$IFACE\" tso {} gso {} gro {} 2>/dev/null || true",
                 tso, gso, gro
             );
             println!();
@@ -1424,8 +1289,37 @@ mod tests {
         assert!(!BoundType::Min
             .is_str_satisfied(Some("4096 524288 268435456"), "4096 1048576 134217728"));
         assert!(!BoundType::Min.is_str_satisfied(Some("4096 1048576"), "4096 1048576 1"));
-        assert!(BoundType::Range.is_str_satisfied(Some("512 65535"), "1024 65535"));
-        assert!(!BoundType::Range.is_str_satisfied(Some("32768 60999"), "1024 65535"));
+        assert!(BoundType::PortRange.is_str_satisfied(Some("32768 60999"), "32768 60999"));
+        assert!(BoundType::PortRange.is_str_satisfied(Some("32768 65535"), "32768 60999"));
+        assert!(!BoundType::PortRange.is_str_satisfied(Some("1024 65535"), "32768 60999"));
+    }
+
+    #[test]
+    fn conntrack_capacity_matches_kube_proxy_defaults() {
+        assert_eq!(conntrack_max_for_cores(1), 131_072);
+        assert_eq!(conntrack_max_for_cores(4), 131_072);
+        assert_eq!(conntrack_max_for_cores(32), 1_048_576);
+    }
+
+    #[test]
+    fn profiles_do_not_overlap_default_nodeport_range() {
+        for profile in [TuningProfile::ControlPlane, TuningProfile::Worker] {
+            let values = SuggestedValues::for_profile(profile);
+            let ports = values
+                .ip_local_port_range
+                .split_whitespace()
+                .map(|value| value.parse::<u16>().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(ports, vec![32_768, 60_999]);
+            assert!(ports[0] > 32_767);
+        }
+    }
+
+    #[test]
+    fn ring_targets_are_clamped_to_device_capabilities() {
+        assert_eq!(safe_ring_target(4096, Some(2048), Some(512)), Some(2048));
+        assert_eq!(safe_ring_target(4096, None, Some(512)), Some(512));
+        assert_eq!(safe_ring_target(4096, None, None), None);
     }
 
     #[test]

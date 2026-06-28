@@ -6,6 +6,7 @@ mod info;
 mod link;
 mod list;
 mod nat;
+mod path;
 mod route;
 
 #[derive(Parser)]

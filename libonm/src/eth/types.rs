@@ -101,6 +101,8 @@ pub struct ConntrackSettings {
     pub tcp_timeout_close_wait: Option<u64>,
     pub tcp_timeout_fin_wait: Option<u64>,
     pub tcp_max_retrans: Option<u64>,
+    pub udp_timeout: Option<u64>,
+    pub udp_timeout_stream: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -112,6 +114,8 @@ pub struct SocketBufferSettings {
     pub tcp_rmem: Option<String>,
     pub tcp_wmem: Option<String>,
     pub netdev_max_backlog: Option<u64>,
+    pub netdev_budget: Option<u64>,
+    pub netdev_budget_usecs: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -124,6 +128,7 @@ pub struct TcpSettings {
     pub keepalive_probes: Option<u64>,
     pub keepalive_intvl: Option<u64>,
     pub ip_local_port_range: Option<String>,
+    pub ip_local_reserved_ports: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -140,12 +145,16 @@ pub struct ArpSettings {
     pub gc_thresh3: Option<u64>,
     pub arp_ignore: Option<u64>,
     pub arp_announce: Option<u64>,
+    pub ipv6_gc_thresh1: Option<u64>,
+    pub ipv6_gc_thresh2: Option<u64>,
+    pub ipv6_gc_thresh3: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RpFilterSettings {
     pub all: Option<u64>,
     pub default: Option<u64>,
+    pub interfaces: Vec<(String, u64)>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -163,6 +172,9 @@ pub struct ConntrackStats {
     pub current: Option<u64>,
     pub max: Option<u64>,
     pub usage_percent: Option<f64>,
+    pub insert_failed: Option<u64>,
+    pub drop: Option<u64>,
+    pub early_drop: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -196,6 +208,8 @@ pub struct SocketStats {
     pub raw_inuse: Option<u64>,
     pub frag_inuse: Option<u64>,
     pub frag_memory: Option<u64>,
+    pub listen_overflows: Option<u64>,
+    pub listen_drops: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -408,6 +422,7 @@ impl ToString for NatType {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NatRule {
+    pub family: String,
     pub chain: String,
     pub nat_type: NatType,
     pub source: Option<String>,

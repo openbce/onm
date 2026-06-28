@@ -47,6 +47,22 @@ fn print_conntrack_stats(ct: &eth::ConntrackStats) {
     };
 
     table.add_row(vec![Cell::new("Usage"), usage_cell]);
+    table.add_row(vec![
+        "Insert Failed".to_string(),
+        ct.insert_failed
+            .map(|v| v.to_string())
+            .unwrap_or("-".to_string()),
+    ]);
+    table.add_row(vec![
+        "Drops".to_string(),
+        ct.drop.map(|v| v.to_string()).unwrap_or("-".to_string()),
+    ]);
+    table.add_row(vec![
+        "Early Drops".to_string(),
+        ct.early_drop
+            .map(|v| v.to_string())
+            .unwrap_or("-".to_string()),
+    ]);
 
     println!("{table}");
     println!();
@@ -182,6 +198,18 @@ fn print_socket_stats(sock: &eth::SocketStats) {
     table.add_row(vec![
         "FRAG Memory".to_string(),
         sock.frag_memory
+            .map(|v| v.to_string())
+            .unwrap_or("-".to_string()),
+    ]);
+    table.add_row(vec![
+        "TCP Listen Overflows".to_string(),
+        sock.listen_overflows
+            .map(|v| v.to_string())
+            .unwrap_or("-".to_string()),
+    ]);
+    table.add_row(vec![
+        "TCP Listen Drops".to_string(),
+        sock.listen_drops
             .map(|v| v.to_string())
             .unwrap_or("-".to_string()),
     ]);
