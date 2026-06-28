@@ -208,7 +208,9 @@ pub struct NetworkSysctl {
 pub struct ConntrackStats {
     pub current: Option<u64>,
     pub max: Option<u64>,
+    pub buckets: Option<u64>,
     pub usage_percent: Option<f64>,
+    pub entries_per_bucket: Option<f64>,
     pub insert_failed: Option<u64>,
     pub drop: Option<u64>,
     pub early_drop: Option<u64>,
@@ -247,6 +249,27 @@ pub struct SocketStats {
     pub frag_memory: Option<u64>,
     pub listen_overflows: Option<u64>,
     pub listen_drops: Option<u64>,
+    pub req_q_full_drop: Option<u64>,
+    pub req_q_full_do_cookies: Option<u64>,
+    pub abort_on_memory: Option<u64>,
+    pub time_wait_overflow: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct NeighborStats {
+    pub ipv4_total: u64,
+    pub ipv6_total: u64,
+    pub reachable: u64,
+    pub stale: u64,
+    pub incomplete: u64,
+    pub failed: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct KubeProxyStats {
+    pub mode: Option<String>,
+    pub ipv4_rules: u64,
+    pub ipv6_rules: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -255,6 +278,8 @@ pub struct InterfaceStats {
     pub rx_packets: u64,
     pub rx_errors: u64,
     pub rx_dropped: u64,
+    pub rx_missed: u64,
+    pub rx_nohandler: u64,
     pub rx_fifo: u64,
     pub rx_frame: u64,
     pub tx_bytes: u64,
@@ -271,6 +296,8 @@ pub struct NetworkStats {
     pub conntrack: ConntrackStats,
     pub softnet: SoftnetStats,
     pub sockets: SocketStats,
+    pub neighbors: NeighborStats,
+    pub kube_proxy: KubeProxyStats,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

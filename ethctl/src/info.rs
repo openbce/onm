@@ -58,8 +58,6 @@ pub enum BoundType {
     Min,
     /// Current value should be <= suggested (e.g., timeouts, retries)
     Max,
-    /// Ephemeral range must avoid lower service ports and provide enough ports.
-    PortRange,
     /// Current scalar value must exactly match the suggestion.
     Exact,
 }
@@ -69,7 +67,6 @@ impl BoundType {
         match self {
             BoundType::Min => ">= ",
             BoundType::Max => "<= ",
-            BoundType::PortRange => "safe range >= ",
             BoundType::Exact => "= ",
         }
     }
@@ -80,40 +77,8 @@ impl BoundType {
             Some(val) => match self {
                 BoundType::Min => val >= suggested,
                 BoundType::Max => val <= suggested,
-                BoundType::PortRange => false,
                 BoundType::Exact => val == suggested,
             },
-        }
-    }
-
-    pub fn is_str_satisfied(&self, current: Option<&str>, suggested: &str) -> bool {
-        let parse = |value: &str| {
-            value
-                .split_whitespace()
-                .map(str::parse::<u64>)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()
-        };
-        let Some(current) = current.and_then(parse) else {
-            return false;
-        };
-        let Some(suggested) = parse(suggested) else {
-            return false;
-        };
-        if current.len() != suggested.len() {
-            return false;
-        }
-        match self {
-            BoundType::Min => current.iter().zip(suggested).all(|(a, b)| *a >= b),
-            BoundType::Max => current.iter().zip(suggested).all(|(a, b)| *a <= b),
-            BoundType::PortRange => {
-                current.len() == 2
-                    && suggested[1] >= suggested[0]
-                    && current[0] >= suggested[0]
-                    && current[1] >= current[0]
-                    && current[1] - current[0] >= suggested[1] - suggested[0]
-            }
-            BoundType::Exact => current == suggested,
         }
     }
 }
@@ -135,10 +100,7 @@ pub struct SuggestedValues {
     // Connection tracking
     pub conntrack_max: u64,
     pub conntrack_tcp_timeout_established: u64,
-    pub conntrack_tcp_timeout_time_wait: u64,
     pub conntrack_tcp_timeout_close_wait: u64,
-    pub conntrack_tcp_timeout_fin_wait: u64,
-    pub conntrack_tcp_max_retrans: u64,
     pub conntrack_udp_timeout: u64,
     pub conntrack_udp_timeout_stream: u64,
     // Socket buffers
@@ -155,13 +117,7 @@ pub struct SuggestedValues {
     pub tcp_keepalive_time: u64,
     pub tcp_keepalive_probes: u64,
     pub tcp_keepalive_intvl: u64,
-    pub ip_local_port_range: &'static str,
-    // Investigation-only network topology candidates
-    pub arp_gc_thresh1: u64,
-    pub arp_gc_thresh2: u64,
-    pub arp_gc_thresh3: u64,
-    pub arp_ignore: u64,
-    pub arp_announce: u64,
+    // Investigation-only network topology candidate
     pub rp_filter: u64,
     // Interface settings (ip link)
     pub txqueuelen: u64,
@@ -192,10 +148,7 @@ impl SuggestedValues {
         Self {
             conntrack_max,
             conntrack_tcp_timeout_established: 86400,
-            conntrack_tcp_timeout_time_wait: 60,
             conntrack_tcp_timeout_close_wait: 3600,
-            conntrack_tcp_timeout_fin_wait: 60,
-            conntrack_tcp_max_retrans: 3,
             conntrack_udp_timeout: 30,
             conntrack_udp_timeout_stream: 300,
 
@@ -212,12 +165,6 @@ impl SuggestedValues {
             tcp_keepalive_time: 600,
             tcp_keepalive_probes: 3,
             tcp_keepalive_intvl: 15,
-            ip_local_port_range: "32768 60999",
-            arp_gc_thresh1: 16_384,
-            arp_gc_thresh2: 65_536,
-            arp_gc_thresh3: 131_072,
-            arp_ignore: 0,
-            arp_announce: 0,
             rp_filter: 0,
 
             txqueuelen: 10000, // High queue for API server traffic bursts
@@ -240,10 +187,7 @@ impl SuggestedValues {
         Self {
             conntrack_max,
             conntrack_tcp_timeout_established: 86400,
-            conntrack_tcp_timeout_time_wait: 60,
             conntrack_tcp_timeout_close_wait: 3600,
-            conntrack_tcp_timeout_fin_wait: 60,
-            conntrack_tcp_max_retrans: 3,
             conntrack_udp_timeout: 30,
             conntrack_udp_timeout_stream: 300,
 
@@ -260,12 +204,6 @@ impl SuggestedValues {
             tcp_keepalive_time: 600,
             tcp_keepalive_probes: 3,
             tcp_keepalive_intvl: 15,
-            ip_local_port_range: "32768 60999",
-            arp_gc_thresh1: 4_096,
-            arp_gc_thresh2: 8_192,
-            arp_gc_thresh3: 16_384,
-            arp_ignore: 0,
-            arp_announce: 0,
             rp_filter: 0,
 
             txqueuelen: 5000, // Moderate queue for pod traffic
@@ -288,10 +226,7 @@ impl SuggestedValues {
         Self {
             conntrack_max,
             conntrack_tcp_timeout_established: 86400,
-            conntrack_tcp_timeout_time_wait: 60,
             conntrack_tcp_timeout_close_wait: 3600,
-            conntrack_tcp_timeout_fin_wait: 60,
-            conntrack_tcp_max_retrans: 3,
             conntrack_udp_timeout: 30,
             conntrack_udp_timeout_stream: 300,
 
@@ -308,12 +243,6 @@ impl SuggestedValues {
             tcp_keepalive_time: 600,
             tcp_keepalive_probes: 3,
             tcp_keepalive_intvl: 15,
-            ip_local_port_range: "32768 60999",
-            arp_gc_thresh1: 4_096,
-            arp_gc_thresh2: 8_192,
-            arp_gc_thresh3: 16_384,
-            arp_ignore: 0,
-            arp_announce: 0,
             rp_filter: 2,
 
             txqueuelen: 2000,
@@ -347,55 +276,38 @@ fn investigation_settings(
     interfaces: &[eth::EthInterface],
 ) -> Vec<(String, String)> {
     let mut settings = vec![
+        ("net.core.rmem_max".to_string(), s.rmem_max.to_string()),
+        ("net.core.wmem_max".to_string(), s.wmem_max.to_string()),
+        ("net.ipv4.tcp_rmem".to_string(), s.tcp_rmem.to_string()),
+        ("net.ipv4.tcp_wmem".to_string(), s.tcp_wmem.to_string()),
         (
-            "net.netfilter.nf_conntrack_buckets".to_string(),
-            (s.conntrack_max / 4).clamp(1_024, 262_144).to_string(),
-        ),
-        ("net.core.netdev_budget".to_string(), "300".to_string()),
-        (
-            "net.core.netdev_budget_usecs".to_string(),
-            "2000".to_string(),
-        ),
-        ("net.ipv4.tcp_tw_reuse".to_string(), "2".to_string()),
-        (
-            "net.ipv4.neigh.default.gc_thresh1".to_string(),
-            s.arp_gc_thresh1.to_string(),
+            "net.core.netdev_max_backlog".to_string(),
+            s.netdev_max_backlog.to_string(),
         ),
         (
-            "net.ipv4.neigh.default.gc_thresh2".to_string(),
-            s.arp_gc_thresh2.to_string(),
+            "net.ipv4.udp_rmem_min".to_string(),
+            s.udp_rmem_min.to_string(),
+        ),
+        ("net.core.somaxconn".to_string(), s.somaxconn.to_string()),
+        (
+            "net.ipv4.tcp_max_syn_backlog".to_string(),
+            s.tcp_max_syn_backlog.to_string(),
         ),
         (
-            "net.ipv4.neigh.default.gc_thresh3".to_string(),
-            s.arp_gc_thresh3.to_string(),
+            "net.ipv4.tcp_fin_timeout".to_string(),
+            s.tcp_fin_timeout.to_string(),
         ),
         (
-            "net.ipv4.conf.all.arp_ignore".to_string(),
-            s.arp_ignore.to_string(),
+            "net.ipv4.tcp_keepalive_time".to_string(),
+            s.tcp_keepalive_time.to_string(),
         ),
         (
-            "net.ipv4.conf.all.arp_announce".to_string(),
-            s.arp_announce.to_string(),
+            "net.ipv4.tcp_keepalive_probes".to_string(),
+            s.tcp_keepalive_probes.to_string(),
         ),
         (
-            "net.ipv6.neigh.default.gc_thresh1".to_string(),
-            s.arp_gc_thresh1.to_string(),
-        ),
-        (
-            "net.ipv6.neigh.default.gc_thresh2".to_string(),
-            s.arp_gc_thresh2.to_string(),
-        ),
-        (
-            "net.ipv6.neigh.default.gc_thresh3".to_string(),
-            s.arp_gc_thresh3.to_string(),
-        ),
-        (
-            "net.ipv4.conf.all.rp_filter".to_string(),
-            s.rp_filter.to_string(),
-        ),
-        (
-            "net.ipv4.conf.default.rp_filter".to_string(),
-            s.rp_filter.to_string(),
+            "net.ipv4.tcp_keepalive_intvl".to_string(),
+            s.tcp_keepalive_intvl.to_string(),
         ),
     ];
 
@@ -413,43 +325,7 @@ fn investigation_settings(
             }),
     );
 
-    if profile.is_gateway() {
-        settings.extend([
-            ("net.core.rmem_max".to_string(), s.rmem_max.to_string()),
-            ("net.core.wmem_max".to_string(), s.wmem_max.to_string()),
-            ("net.ipv4.tcp_rmem".to_string(), s.tcp_rmem.to_string()),
-            ("net.ipv4.tcp_wmem".to_string(), s.tcp_wmem.to_string()),
-            (
-                "net.ipv4.udp_rmem_min".to_string(),
-                s.udp_rmem_min.to_string(),
-            ),
-            ("net.core.somaxconn".to_string(), s.somaxconn.to_string()),
-            (
-                "net.ipv4.tcp_max_syn_backlog".to_string(),
-                s.tcp_max_syn_backlog.to_string(),
-            ),
-            (
-                "net.ipv4.tcp_fin_timeout".to_string(),
-                s.tcp_fin_timeout.to_string(),
-            ),
-            (
-                "net.ipv4.tcp_keepalive_time".to_string(),
-                s.tcp_keepalive_time.to_string(),
-            ),
-            (
-                "net.ipv4.tcp_keepalive_probes".to_string(),
-                s.tcp_keepalive_probes.to_string(),
-            ),
-            (
-                "net.ipv4.tcp_keepalive_intvl".to_string(),
-                s.tcp_keepalive_intvl.to_string(),
-            ),
-            (
-                "net.ipv4.ip_local_port_range".to_string(),
-                s.ip_local_port_range.to_string(),
-            ),
-        ]);
-    } else {
+    if !profile.is_gateway() {
         settings.extend([
             ("net.ipv4.ip_forward".to_string(), "1".to_string()),
             ("net.ipv6.conf.all.forwarding".to_string(), "1".to_string()),
@@ -467,7 +343,8 @@ fn print_investigation_settings(
     interfaces: &[eth::EthInterface],
 ) {
     println!();
-    println!("# Preferred values requiring investigation (not applied; uncomment explicitly):");
+    println!("# Starting candidates requiring measured pressure and workload validation:");
+    println!("# Check ethctl stats deltas, RAM/BDP, application timeouts, and CNI topology first.");
     for (key, value) in investigation_settings(profile, s, sysctl, interfaces) {
         println!("{}", investigation_output_line(format, &key, &value));
     }
@@ -653,12 +530,11 @@ fn add_sysctl_rows(
         s.conntrack_tcp_timeout_established,
         Max,
     );
-    add_row(
+    add_info_row(
         table,
         "  nf_conntrack_tcp_timeout_time_wait",
         sysctl.conntrack.tcp_timeout_time_wait,
-        s.conntrack_tcp_timeout_time_wait,
-        Max,
+        "kernel/CNI-specific",
     );
     add_row(
         table,
@@ -681,51 +557,32 @@ fn add_sysctl_rows(
         s.conntrack_tcp_timeout_close_wait,
         Max,
     );
-    add_row(
+    add_info_row(
         table,
         "  nf_conntrack_tcp_timeout_fin_wait",
         sysctl.conntrack.tcp_timeout_fin_wait,
-        s.conntrack_tcp_timeout_fin_wait,
-        Max,
+        "kernel/CNI-specific",
     );
-    add_row(
+    add_info_row(
         table,
         "  nf_conntrack_tcp_max_retrans",
         sysctl.conntrack.tcp_max_retrans,
-        s.conntrack_tcp_max_retrans,
-        Max,
+        "kernel default",
     );
 
     add_section(table, "Socket Buffers");
-    if profile.is_gateway() {
-        add_info_row_bytes(
-            table,
-            "  net.core.rmem_max",
-            sysctl.socket_buffer.rmem_max,
-            &format_size(s.rmem_max),
-        );
-        add_info_row_bytes(
-            table,
-            "  net.core.wmem_max",
-            sysctl.socket_buffer.wmem_max,
-            &format_size(s.wmem_max),
-        );
-    } else {
-        add_row_bytes(
-            table,
-            "  net.core.rmem_max",
-            sysctl.socket_buffer.rmem_max,
-            s.rmem_max,
-            Min,
-        );
-        add_row_bytes(
-            table,
-            "  net.core.wmem_max",
-            sysctl.socket_buffer.wmem_max,
-            s.wmem_max,
-            Min,
-        );
-    }
+    add_info_row_bytes(
+        table,
+        "  net.core.rmem_max",
+        sysctl.socket_buffer.rmem_max,
+        &format_size(s.rmem_max),
+    );
+    add_info_row_bytes(
+        table,
+        "  net.core.wmem_max",
+        sysctl.socket_buffer.wmem_max,
+        &format_size(s.wmem_max),
+    );
     add_info_row_bytes(
         table,
         "  net.core.rmem_default",
@@ -738,49 +595,31 @@ fn add_sysctl_rows(
         sysctl.socket_buffer.wmem_default,
         "kernel default",
     );
-    if profile.is_gateway() {
-        add_info_row_str(
-            table,
-            "  net.ipv4.tcp_rmem",
-            sysctl
-                .socket_buffer
-                .tcp_rmem
-                .as_deref()
-                .map(|value| format_count_list(value, Some(CountFormat::Bytes))),
-            &format_count_list(s.tcp_rmem, Some(CountFormat::Bytes)),
-        );
-        add_info_row_str(
-            table,
-            "  net.ipv4.tcp_wmem",
-            sysctl
-                .socket_buffer
-                .tcp_wmem
-                .as_deref()
-                .map(|value| format_count_list(value, Some(CountFormat::Bytes))),
-            &format_count_list(s.tcp_wmem, Some(CountFormat::Bytes)),
-        );
-    } else {
-        add_row_tcp_mem(
-            table,
-            "  net.ipv4.tcp_rmem",
-            sysctl.socket_buffer.tcp_rmem.clone(),
-            s.tcp_rmem,
-            Min,
-        );
-        add_row_tcp_mem(
-            table,
-            "  net.ipv4.tcp_wmem",
-            sysctl.socket_buffer.tcp_wmem.clone(),
-            s.tcp_wmem,
-            Min,
-        );
-    }
-    add_row_count(
+    add_info_row_str(
+        table,
+        "  net.ipv4.tcp_rmem",
+        sysctl
+            .socket_buffer
+            .tcp_rmem
+            .as_deref()
+            .map(|value| format_count_list(value, Some(CountFormat::Bytes))),
+        &format_count_list(s.tcp_rmem, Some(CountFormat::Bytes)),
+    );
+    add_info_row_str(
+        table,
+        "  net.ipv4.tcp_wmem",
+        sysctl
+            .socket_buffer
+            .tcp_wmem
+            .as_deref()
+            .map(|value| format_count_list(value, Some(CountFormat::Bytes))),
+        &format_count_list(s.tcp_wmem, Some(CountFormat::Bytes)),
+    );
+    add_info_row_count(
         table,
         "  net.core.netdev_max_backlog",
         sysctl.socket_buffer.netdev_max_backlog,
         s.netdev_max_backlog,
-        Min,
     );
     add_info_row(
         table,
@@ -794,22 +633,12 @@ fn add_sysctl_rows(
         sysctl.socket_buffer.netdev_budget_usecs,
         "2000",
     );
-    if profile.is_gateway() {
-        add_info_row_bytes(
-            table,
-            "  net.ipv4.udp_rmem_min",
-            sysctl.udp.rmem_min,
-            &format_size(s.udp_rmem_min),
-        );
-    } else {
-        add_row_bytes(
-            table,
-            "  net.ipv4.udp_rmem_min",
-            sysctl.udp.rmem_min,
-            s.udp_rmem_min,
-            Min,
-        );
-    }
+    add_info_row_bytes(
+        table,
+        "  net.ipv4.udp_rmem_min",
+        sysctl.udp.rmem_min,
+        &format_size(s.udp_rmem_min),
+    );
     add_info_row_bytes(
         table,
         "  net.ipv4.udp_wmem_min (unused)",
@@ -828,156 +657,122 @@ fn add_sysctl_rows(
     );
 
     add_section(table, "TCP Settings");
-    add_info_row(table, "  net.ipv4.tcp_tw_reuse", sysctl.tcp.tw_reuse, "2");
-    if profile.is_gateway() {
-        add_info_row_count(
-            table,
-            "  net.core.somaxconn",
-            sysctl.tcp.somaxconn,
-            s.somaxconn,
-        );
-        add_info_row_count(
-            table,
-            "  net.ipv4.tcp_max_syn_backlog",
-            sysctl.tcp.max_syn_backlog,
-            s.tcp_max_syn_backlog,
-        );
-        add_info_row(
-            table,
-            "  net.ipv4.tcp_fin_timeout",
-            sysctl.tcp.fin_timeout,
-            &s.tcp_fin_timeout.to_string(),
-        );
-        add_info_row(
-            table,
-            "  net.ipv4.tcp_keepalive_time",
-            sysctl.tcp.keepalive_time,
-            &s.tcp_keepalive_time.to_string(),
-        );
-        add_info_row(
-            table,
-            "  net.ipv4.tcp_keepalive_probes",
-            sysctl.tcp.keepalive_probes,
-            &s.tcp_keepalive_probes.to_string(),
-        );
-        add_info_row(
-            table,
-            "  net.ipv4.tcp_keepalive_intvl",
-            sysctl.tcp.keepalive_intvl,
-            &s.tcp_keepalive_intvl.to_string(),
-        );
-        add_info_row_str(
-            table,
-            "  net.ipv4.ip_local_port_range",
-            sysctl.tcp.ip_local_port_range.clone(),
-            s.ip_local_port_range,
-        );
-    } else {
-        add_row_count(
-            table,
-            "  net.core.somaxconn",
-            sysctl.tcp.somaxconn,
-            s.somaxconn,
-            Min,
-        );
-        add_row_count(
-            table,
-            "  net.ipv4.tcp_max_syn_backlog",
-            sysctl.tcp.max_syn_backlog,
-            s.tcp_max_syn_backlog,
-            Min,
-        );
-        add_row(
-            table,
-            "  net.ipv4.tcp_fin_timeout",
-            sysctl.tcp.fin_timeout,
-            s.tcp_fin_timeout,
-            Max,
-        );
-        add_row(
-            table,
-            "  net.ipv4.tcp_keepalive_time",
-            sysctl.tcp.keepalive_time,
-            s.tcp_keepalive_time,
-            Max,
-        );
-        add_row(
-            table,
-            "  net.ipv4.tcp_keepalive_probes",
-            sysctl.tcp.keepalive_probes,
-            s.tcp_keepalive_probes,
-            Max,
-        );
-        add_row(
-            table,
-            "  net.ipv4.tcp_keepalive_intvl",
-            sysctl.tcp.keepalive_intvl,
-            s.tcp_keepalive_intvl,
-            Max,
-        );
-        add_row_str(
-            table,
-            "  net.ipv4.ip_local_port_range",
-            sysctl.tcp.ip_local_port_range.clone(),
-            s.ip_local_port_range,
-            BoundType::PortRange,
-        );
-    }
+    table.add_row(vec![
+        "  net.ipv4.tcp_tw_reuse".to_string(),
+        sysctl
+            .tcp
+            .tw_reuse
+            .map_or("-".to_string(), |value| value.to_string()),
+        "kernel default".to_string(),
+    ]);
+    add_info_row_count(
+        table,
+        "  net.core.somaxconn",
+        sysctl.tcp.somaxconn,
+        s.somaxconn,
+    );
+    add_info_row_count(
+        table,
+        "  net.ipv4.tcp_max_syn_backlog",
+        sysctl.tcp.max_syn_backlog,
+        s.tcp_max_syn_backlog,
+    );
+    add_info_row(
+        table,
+        "  net.ipv4.tcp_fin_timeout",
+        sysctl.tcp.fin_timeout,
+        "application-specific",
+    );
+    add_info_row(
+        table,
+        "  net.ipv4.tcp_keepalive_time",
+        sysctl.tcp.keepalive_time,
+        "application-specific",
+    );
+    add_info_row(
+        table,
+        "  net.ipv4.tcp_keepalive_probes",
+        sysctl.tcp.keepalive_probes,
+        "application-specific",
+    );
+    add_info_row(
+        table,
+        "  net.ipv4.tcp_keepalive_intvl",
+        sysctl.tcp.keepalive_intvl,
+        "application-specific",
+    );
+    add_info_row_str(
+        table,
+        "  net.ipv4.ip_local_port_range",
+        sysctl.tcp.ip_local_port_range.clone(),
+        "kernel default / capacity-check",
+    );
     add_info_row_str(
         table,
         "  net.ipv4.ip_local_reserved_ports",
         sysctl.tcp.ip_local_reserved_ports.clone(),
         "NodePort/app-specific",
     );
+    let ephemeral_capacity = usable_ephemeral_ports(
+        sysctl.tcp.ip_local_port_range.as_deref(),
+        sysctl.tcp.ip_local_reserved_ports.as_deref(),
+    );
+    table.add_row(vec![
+        "  usable ephemeral ports".to_string(),
+        ephemeral_capacity
+            .map(format_count)
+            .unwrap_or("-".to_string()),
+        "monitor TIME_WAIT/exhaustion".to_string(),
+    ]);
 
     add_section(table, "ARP / Neighbor Table");
-    add_info_row_count(
+    add_info_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh1",
         sysctl.arp.gc_thresh1,
-        s.arp_gc_thresh1,
+        "derive from neighbor occupancy",
     );
-    add_info_row_count(
+    add_info_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh2",
         sysctl.arp.gc_thresh2,
-        s.arp_gc_thresh2,
+        "derive from neighbor occupancy",
     );
-    add_info_row_count(
+    add_info_row(
         table,
         "  net.ipv4.neigh.default.gc_thresh3",
         sysctl.arp.gc_thresh3,
-        s.arp_gc_thresh3,
+        "derive from neighbor occupancy",
     );
     add_info_row(
         table,
         "  net.ipv4.conf.all.arp_ignore",
         sysctl.arp.arp_ignore,
-        &s.arp_ignore.to_string(),
+        "topology-specific",
     );
     add_info_row(
         table,
         "  net.ipv4.conf.all.arp_announce",
         sysctl.arp.arp_announce,
-        &s.arp_announce.to_string(),
+        "topology-specific",
     );
-    add_info_row_count(
+    add_info_row(
         table,
         "  net.ipv6.neigh.default.gc_thresh1",
         sysctl.arp.ipv6_gc_thresh1,
-        s.arp_gc_thresh1,
+        "derive from neighbor occupancy",
     );
-    add_info_row_count(
+    add_info_row(
         table,
         "  net.ipv6.neigh.default.gc_thresh2",
         sysctl.arp.ipv6_gc_thresh2,
-        s.arp_gc_thresh2,
+        "derive from neighbor occupancy",
     );
-    add_info_row_count(
+    add_info_row(
         table,
         "  net.ipv6.neigh.default.gc_thresh3",
         sysctl.arp.ipv6_gc_thresh3,
-        s.arp_gc_thresh3,
+        "derive from neighbor occupancy",
     );
 
     add_section(table, "Reverse Path Filtering");
@@ -985,13 +780,13 @@ fn add_sysctl_rows(
         table,
         "  net.ipv4.conf.all.rp_filter",
         sysctl.rp_filter.all,
-        &s.rp_filter.to_string(),
+        "CNI/topology-specific",
     );
     add_info_row(
         table,
         "  net.ipv4.conf.default.rp_filter",
         sysctl.rp_filter.default,
-        &s.rp_filter.to_string(),
+        "CNI/topology-specific",
     );
     for (name, value) in &sysctl.rp_filter.interfaces {
         let setting = format!("  net.ipv4.conf.{name}.rp_filter");
@@ -1037,7 +832,11 @@ pub async fn print_link_tables(name: &str, profile: TuningProfile) -> Result<(),
         add_row_u32_bytes(&mut table, "  gro_max_size", l.gro_max_size, 0);
         add_row_u32_bytes(&mut table, "  tso_max_size", l.tso_max_size, 0);
         add_row_u32(&mut table, "  tso_max_segs", l.tso_max_segs, 0);
-        add_row_str(&mut table, "  qdisc", l.qdisc.clone(), "-", BoundType::Min);
+        table.add_row(vec![
+            "  qdisc".to_string(),
+            l.qdisc.clone().unwrap_or("-".to_string()),
+            "-".to_string(),
+        ]);
         add_row_u32(&mut table, "  group", l.group, 0);
     }
 
@@ -1112,6 +911,53 @@ fn format_count_list(value: &str, format: Option<CountFormat>) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn usable_ephemeral_ports(range: Option<&str>, reserved: Option<&str>) -> Option<u64> {
+    let values = range?
+        .split_whitespace()
+        .map(str::parse::<u16>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    if values.len() != 2 || values[1] < values[0] {
+        return None;
+    }
+    let (start, end) = (values[0], values[1]);
+    let mut intervals = reserved
+        .unwrap_or_default()
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| {
+            let mut bounds = value.splitn(2, '-');
+            let first = bounds.next()?.parse::<u16>().ok()?;
+            let last = bounds
+                .next()
+                .and_then(|bound| bound.parse::<u16>().ok())
+                .unwrap_or(first);
+            (last >= start && first <= end).then_some((first.max(start), last.min(end)))
+        })
+        .collect::<Vec<_>>();
+    intervals.sort_unstable();
+
+    let mut reserved_count = 0u64;
+    let mut merged: Option<(u16, u16)> = None;
+    for (first, last) in intervals {
+        match merged {
+            Some((merged_first, merged_last)) if first as u32 <= merged_last as u32 + 1 => {
+                merged = Some((merged_first, merged_last.max(last)));
+            }
+            Some((merged_first, merged_last)) => {
+                reserved_count += (merged_last - merged_first) as u64 + 1;
+                merged = Some((first, last));
+            }
+            None => merged = Some((first, last)),
+        }
+    }
+    if let Some((first, last)) = merged {
+        reserved_count += (last - first) as u64 + 1;
+    }
+
+    Some((end - start) as u64 + 1 - reserved_count)
 }
 
 fn add_row_u32(table: &mut Table, name: &str, value: Option<u32>, suggested: u32) {
@@ -1226,73 +1072,6 @@ fn add_info_row_str(table: &mut Table, name: &str, value: Option<String>, prefer
             .map(|value| format_count_list(value, None))
             .unwrap_or("-".to_string()),
         investigation_value(&format_count_list(preferred, None)),
-    ]);
-}
-
-fn add_row_bytes(
-    table: &mut Table,
-    name: &str,
-    value: Option<u64>,
-    suggested: u64,
-    bound: BoundType,
-) {
-    let suggested_str = if bound.is_satisfied(value, suggested) {
-        "OK".to_string()
-    } else {
-        format!("{}{}", bound.prefix(), format_size(suggested))
-    };
-    table.add_row(vec![
-        name.to_string(),
-        value.map(|v| format_size(v)).unwrap_or("-".to_string()),
-        suggested_str,
-    ]);
-}
-
-fn add_row_str(
-    table: &mut Table,
-    name: &str,
-    value: Option<String>,
-    suggested: &str,
-    bound: BoundType,
-) {
-    let suggested_str = if bound.is_str_satisfied(value.as_deref(), suggested) {
-        "OK".to_string()
-    } else {
-        format!("{}{}", bound.prefix(), format_count_list(suggested, None))
-    };
-    table.add_row(vec![
-        name.to_string(),
-        value
-            .as_deref()
-            .map(|value| format_count_list(value, None))
-            .unwrap_or("-".to_string()),
-        suggested_str,
-    ]);
-}
-
-fn add_row_tcp_mem(
-    table: &mut Table,
-    name: &str,
-    value: Option<String>,
-    suggested: &str,
-    bound: BoundType,
-) {
-    let suggested_str = if bound.is_str_satisfied(value.as_deref(), suggested) {
-        "OK".to_string()
-    } else {
-        format!(
-            "{}{}",
-            bound.prefix(),
-            format_count_list(suggested, Some(CountFormat::Bytes))
-        )
-    };
-    table.add_row(vec![
-        name.to_string(),
-        value
-            .as_deref()
-            .map(|value| format_count_list(value, Some(CountFormat::Bytes)))
-            .unwrap_or("-".to_string()),
-        suggested_str,
     ]);
 }
 
@@ -1439,27 +1218,9 @@ pub fn generate_sysctl_output(
             Max,
         ),
         (
-            "net.netfilter.nf_conntrack_tcp_timeout_time_wait",
-            s.conntrack_tcp_timeout_time_wait,
-            sysctl.conntrack.tcp_timeout_time_wait,
-            Max,
-        ),
-        (
             "net.netfilter.nf_conntrack_tcp_timeout_close_wait",
             s.conntrack_tcp_timeout_close_wait,
             sysctl.conntrack.tcp_timeout_close_wait,
-            Max,
-        ),
-        (
-            "net.netfilter.nf_conntrack_tcp_timeout_fin_wait",
-            s.conntrack_tcp_timeout_fin_wait,
-            sysctl.conntrack.tcp_timeout_fin_wait,
-            Max,
-        ),
-        (
-            "net.netfilter.nf_conntrack_tcp_max_retrans",
-            s.conntrack_tcp_max_retrans,
-            sysctl.conntrack.tcp_max_retrans,
             Max,
         ),
         (
@@ -1474,88 +1235,9 @@ pub fn generate_sysctl_output(
             sysctl.conntrack.udp_timeout_stream,
             Max,
         ),
-        (
-            "net.core.rmem_max",
-            s.rmem_max,
-            sysctl.socket_buffer.rmem_max,
-            Min,
-        ),
-        (
-            "net.core.wmem_max",
-            s.wmem_max,
-            sysctl.socket_buffer.wmem_max,
-            Min,
-        ),
-        (
-            "net.core.netdev_max_backlog",
-            s.netdev_max_backlog,
-            sysctl.socket_buffer.netdev_max_backlog,
-            Min,
-        ),
-        ("net.core.somaxconn", s.somaxconn, sysctl.tcp.somaxconn, Min),
-        (
-            "net.ipv4.tcp_max_syn_backlog",
-            s.tcp_max_syn_backlog,
-            sysctl.tcp.max_syn_backlog,
-            Min,
-        ),
-        (
-            "net.ipv4.tcp_fin_timeout",
-            s.tcp_fin_timeout,
-            sysctl.tcp.fin_timeout,
-            Max,
-        ),
-        (
-            "net.ipv4.tcp_keepalive_time",
-            s.tcp_keepalive_time,
-            sysctl.tcp.keepalive_time,
-            Max,
-        ),
-        (
-            "net.ipv4.tcp_keepalive_probes",
-            s.tcp_keepalive_probes,
-            sysctl.tcp.keepalive_probes,
-            Max,
-        ),
-        (
-            "net.ipv4.tcp_keepalive_intvl",
-            s.tcp_keepalive_intvl,
-            sysctl.tcp.keepalive_intvl,
-            Max,
-        ),
-        (
-            "net.ipv4.udp_rmem_min",
-            s.udp_rmem_min,
-            sysctl.udp.rmem_min,
-            Min,
-        ),
-    ];
-
-    let mut string_settings: Vec<(&str, &str, Option<String>, BoundType)> = vec![
-        (
-            "net.ipv4.tcp_rmem",
-            s.tcp_rmem,
-            sysctl.socket_buffer.tcp_rmem.clone(),
-            Min,
-        ),
-        (
-            "net.ipv4.tcp_wmem",
-            s.tcp_wmem,
-            sysctl.socket_buffer.tcp_wmem.clone(),
-            Min,
-        ),
-        (
-            "net.ipv4.ip_local_port_range",
-            s.ip_local_port_range,
-            sysctl.tcp.ip_local_port_range.clone(),
-            BoundType::PortRange,
-        ),
     ];
 
     if profile.is_gateway() {
-        settings.retain(|(key, _, _, _)| {
-            key.starts_with("net.netfilter.") || *key == "net.core.netdev_max_backlog"
-        });
         settings.push((
             "net.ipv4.ip_forward",
             1,
@@ -1570,21 +1252,12 @@ pub fn generate_sysctl_output(
                 BoundType::Exact,
             ));
         }
-        string_settings.clear();
     }
 
     let needs_change: Vec<(&str, String)> = settings
         .iter()
         .filter(|(_, suggested, current, bound)| !bound.is_satisfied(*current, *suggested))
         .map(|(key, suggested, _, _)| (*key, suggested.to_string()))
-        .chain(
-            string_settings
-                .iter()
-                .filter(|(_, suggested, current, bound)| {
-                    !bound.is_str_satisfied(current.as_deref(), suggested)
-                })
-                .map(|(key, suggested, _, _)| (*key, suggested.to_string())),
-        )
         .collect();
 
     match format {
@@ -1668,7 +1341,7 @@ pub async fn generate_link_output(
     match format {
         OutputFormat::Cmd => {
             if let (Some(rx), Some(tx)) = (ring_rx, ring_tx) {
-                println!("ethtool -G {} rx {} tx {}", name, rx, tx);
+                println!("# Candidate only: ethtool -G {} rx {} tx {}", name, rx, tx);
             }
             println!(
                 "# MTU, TX queue length, coalescing, and offloads require workload/CNI validation."
@@ -1718,7 +1391,7 @@ pub async fn generate_link_output(
             println!("# ip link set dev {} mtu {}", name, s.mtu);
             println!();
             if let (Some(rx), Some(tx)) = (ring_rx, ring_tx) {
-                println!("ethtool -G {} rx {} tx {}", name, rx, tx);
+                println!("# ethtool -G {} rx {} tx {}", name, rx, tx);
             }
             println!(
                 "# ethtool -C {} rx-usecs {} tx-usecs {}",
@@ -1740,7 +1413,7 @@ pub async fn generate_link_output(
             println!();
             if let (Some(rx), Some(tx)) = (ring_rx, ring_tx) {
                 println!(
-                    "ethtool -G \"$IFACE\" rx {} tx {} 2>/dev/null || true",
+                    "# ethtool -G \"$IFACE\" rx {} tx {} 2>/dev/null || true",
                     rx, tx
                 );
             }
@@ -1767,40 +1440,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn string_bounds_compare_each_numeric_field() {
-        assert!(BoundType::Min
-            .is_str_satisfied(Some("4096 2097152 268435456"), "4096 1048576 134217728"));
-        assert!(!BoundType::Min
-            .is_str_satisfied(Some("4096 524288 268435456"), "4096 1048576 134217728"));
-        assert!(!BoundType::Min.is_str_satisfied(Some("4096 1048576"), "4096 1048576 1"));
-        assert!(BoundType::PortRange.is_str_satisfied(Some("32768 60999"), "32768 60999"));
-        assert!(BoundType::PortRange.is_str_satisfied(Some("32768 65535"), "32768 60999"));
-        assert!(!BoundType::PortRange.is_str_satisfied(Some("1024 65535"), "32768 60999"));
-    }
-
-    #[test]
     fn conntrack_capacity_matches_kube_proxy_defaults() {
         assert_eq!(conntrack_max_for_cores(1), 131_072);
         assert_eq!(conntrack_max_for_cores(4), 131_072);
         assert_eq!(conntrack_max_for_cores(32), 1_048_576);
-    }
-
-    #[test]
-    fn profiles_do_not_overlap_default_nodeport_range() {
-        for profile in [
-            TuningProfile::ControlPlane,
-            TuningProfile::Worker,
-            TuningProfile::Gateway,
-        ] {
-            let values = SuggestedValues::for_profile(profile);
-            let ports = values
-                .ip_local_port_range
-                .split_whitespace()
-                .map(|value| value.parse::<u16>().unwrap())
-                .collect::<Vec<_>>();
-            assert_eq!(ports, vec![32_768, 60_999]);
-            assert!(ports[0] > 32_767);
-        }
     }
 
     #[test]
@@ -1839,8 +1482,12 @@ mod tests {
         let gateway = SuggestedValues::for_profile(TuningProfile::Gateway);
         let gateway_settings =
             investigation_settings(TuningProfile::Gateway, &gateway, &sysctl, &interfaces);
-        assert!(gateway_settings
-            .contains(&("net.ipv4.conf.all.rp_filter".to_string(), "2".to_string())));
+        assert!(!gateway_settings
+            .iter()
+            .any(|(key, _)| key == "net.ipv4.conf.all.rp_filter"));
+        assert!(!gateway_settings
+            .iter()
+            .any(|(key, _)| key == "net.ipv4.conf.default.rp_filter"));
         assert!(gateway_settings
             .iter()
             .any(|(key, _)| key == "net.ipv4.conf.eth0.rp_filter"));
@@ -1850,6 +1497,12 @@ mod tests {
         assert!(gateway_settings
             .iter()
             .any(|(key, _)| key == "net.core.rmem_max"));
+        assert!(!gateway_settings
+            .iter()
+            .any(|(key, _)| key == "net.ipv4.tcp_tw_reuse"));
+        assert!(!gateway_settings
+            .iter()
+            .any(|(key, _)| key.contains("gc_thresh")));
         assert!(!gateway_settings
             .iter()
             .any(|(key, _)| key == "net.ipv4.ip_forward"));
@@ -1890,5 +1543,20 @@ mod tests {
             "4Ki 128Ki 16Mi"
         );
         assert_eq!(format_count_list("32768\t  60999", None), "32768 60999");
+    }
+
+    #[test]
+    fn ephemeral_capacity_excludes_merged_reserved_ranges() {
+        assert_eq!(
+            usable_ephemeral_ports(
+                Some("32768 60999"),
+                Some("30000-32767,40000-40009,40005-40020")
+            ),
+            Some(28_211)
+        );
+        assert_eq!(
+            usable_ephemeral_ports(Some("32768 60999"), Some("")),
+            Some(28_232)
+        );
     }
 }

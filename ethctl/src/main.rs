@@ -9,6 +9,7 @@ mod list;
 mod nat;
 mod path;
 mod route;
+mod stats;
 
 #[derive(Parser)]
 #[command(name = "ethctl")]
@@ -62,6 +63,12 @@ enum Commands {
         #[arg(short, long)]
         chain: Option<String>,
     },
+    /// Show network pressure and saturation counters
+    Stats {
+        /// Include counters for a specific interface
+        #[arg(short, long)]
+        interface: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -91,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => link::run(&name, &profile, generate.as_deref()).await?,
         Commands::Route { ipv4, ipv6 } => route::run(ipv4, ipv6).await?,
         Commands::Nat { chain } => nat::run(chain.as_deref())?,
+        Commands::Stats { interface } => stats::run(interface.as_deref())?,
     }
 
     Ok(())

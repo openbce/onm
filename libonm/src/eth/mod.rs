@@ -10,9 +10,10 @@ pub use nat::get_nat_rules;
 pub use types::{
     ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
     EthtoolOffload, EthtoolRing, EthtoolSettings, ForwardingSettings, InterfaceStats,
-    InterfaceType, LinkSettings, LinkState, NatRule, NatTable, NatType, NetworkStats,
-    NetworkSysctl, RouteEntry, RouteProtocol, RouteScope, RouteTable, RouteType, RpFilterSettings,
-    SocketBufferSettings, SocketStats, SoftnetCpuStats, SoftnetStats, TcpSettings, UdpSettings,
+    InterfaceType, KubeProxyStats, LinkSettings, LinkState, NatRule, NatTable, NatType,
+    NeighborStats, NetworkStats, NetworkSysctl, RouteEntry, RouteProtocol, RouteScope, RouteTable,
+    RouteType, RpFilterSettings, SocketBufferSettings, SocketStats, SoftnetCpuStats, SoftnetStats,
+    TcpSettings, UdpSettings,
 };
 
 const SYS_CLASS_NET: &str = "/sys/class/net";
@@ -380,15 +381,24 @@ pub fn get_network_stats() -> NetworkStats {
         conntrack: get_conntrack_stats(),
         softnet: get_softnet_stats(),
         sockets: get_socket_stats(),
+        neighbors: get_neighbor_stats(),
+        kube_proxy: get_kube_proxy_stats(),
     }
 }
 
 fn get_conntrack_stats() -> ConntrackStats {
     let current = read_sysctl_u64("net.netfilter.nf_conntrack_count");
     let max = read_sysctl_u64("net.netfilter.nf_conntrack_max");
+    let buckets = read_sysctl_u64("net.netfilter.nf_conntrack_buckets");
 
     let usage_percent = match (current, max) {
         (Some(c), Some(m)) if m > 0 => Some((c as f64 / m as f64) * 100.0),
+        _ => None,
+    };
+    let entries_per_bucket = match (current, buckets) {
+        (Some(entries), Some(bucket_count)) if bucket_count > 0 => {
+            Some(entries as f64 / bucket_count as f64)
+        }
         _ => None,
     };
     let (insert_failed, drop, early_drop) =
@@ -400,7 +410,9 @@ fn get_conntrack_stats() -> ConntrackStats {
     ConntrackStats {
         current,
         max,
+        buckets,
         usage_percent,
+        entries_per_bucket,
         insert_failed,
         drop,
         early_drop,
@@ -543,9 +555,147 @@ fn get_socket_stats() -> SocketStats {
     if let Ok(netstat) = fs::read_to_string(Path::new(PROC_NET).join("netstat")) {
         stats.listen_overflows = parse_netstat_value(&netstat, "TcpExt:", "ListenOverflows");
         stats.listen_drops = parse_netstat_value(&netstat, "TcpExt:", "ListenDrops");
+        stats.req_q_full_drop = parse_netstat_value(&netstat, "TcpExt:", "TCPReqQFullDrop");
+        stats.req_q_full_do_cookies =
+            parse_netstat_value(&netstat, "TcpExt:", "TCPReqQFullDoCookies");
+        stats.abort_on_memory = parse_netstat_value(&netstat, "TcpExt:", "TCPAbortOnMemory");
+        stats.time_wait_overflow = parse_netstat_value(&netstat, "TcpExt:", "TCPTimeWaitOverflow");
     }
 
     stats
+}
+
+fn get_neighbor_stats() -> NeighborStats {
+    use std::process::Command;
+
+    let mut stats = NeighborStats::default();
+    for (family, is_ipv6) in ["-4", "-6"].into_iter().zip([false, true]) {
+        let Ok(output) = Command::new("ip")
+            .args(["-j", family, "neighbor", "show"])
+            .output()
+        else {
+            continue;
+        };
+        if output.status.success() {
+            parse_neighbor_json(
+                &String::from_utf8_lossy(&output.stdout),
+                is_ipv6,
+                &mut stats,
+            );
+        }
+    }
+    stats
+}
+
+fn parse_neighbor_json(content: &str, is_ipv6: bool, stats: &mut NeighborStats) {
+    let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(content) else {
+        return;
+    };
+
+    for entry in entries {
+        if is_ipv6 {
+            stats.ipv6_total += 1;
+        } else {
+            stats.ipv4_total += 1;
+        }
+
+        let states = entry
+            .get("state")
+            .and_then(|state| state.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|state| state.as_str());
+        for state in states {
+            match state.to_ascii_uppercase().as_str() {
+                "REACHABLE" => stats.reachable += 1,
+                "STALE" => stats.stale += 1,
+                "INCOMPLETE" => stats.incomplete += 1,
+                "FAILED" => stats.failed += 1,
+                _ => {}
+            }
+        }
+    }
+}
+
+fn get_kube_proxy_stats() -> KubeProxyStats {
+    use std::process::Command;
+
+    let nft4 = Command::new("nft")
+        .args(["-j", "list", "table", "ip", "kube-proxy"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| count_nft_rules(&String::from_utf8_lossy(&output.stdout)));
+    let nft6 = Command::new("nft")
+        .args(["-j", "list", "table", "ip6", "kube-proxy"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| count_nft_rules(&String::from_utf8_lossy(&output.stdout)));
+
+    if nft4.is_some() || nft6.is_some() {
+        return KubeProxyStats {
+            mode: Some("nftables".to_string()),
+            ipv4_rules: nft4.unwrap_or(0),
+            ipv6_rules: nft6.unwrap_or(0),
+        };
+    }
+
+    let iptables_rules = count_command_rules("iptables");
+    let ip6tables_rules = count_command_rules("ip6tables");
+    if iptables_rules > 0 || ip6tables_rules > 0 {
+        return KubeProxyStats {
+            mode: Some("iptables".to_string()),
+            ipv4_rules: iptables_rules,
+            ipv6_rules: ip6tables_rules,
+        };
+    }
+
+    let ipvs_active = fs::read_to_string(Path::new(PROC_NET).join("ip_vs"))
+        .map(|content| {
+            content
+                .lines()
+                .any(|line| line.starts_with("TCP") || line.starts_with("UDP"))
+        })
+        .unwrap_or(false);
+    KubeProxyStats {
+        mode: ipvs_active.then(|| "ipvs".to_string()),
+        ..KubeProxyStats::default()
+    }
+}
+
+fn count_command_rules(command: &str) -> u64 {
+    use std::process::Command;
+
+    Command::new(command)
+        .args(["-t", "nat", "-S"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| line.contains("KUBE-") && line.starts_with("-A "))
+                .count() as u64
+        })
+        .unwrap_or(0)
+}
+
+fn count_nft_rules(content: &str) -> u64 {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|root| {
+            root.get("nftables")
+                .and_then(|items| items.as_array())
+                .cloned()
+        })
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.get("rule").is_some())
+                .count() as u64
+        })
+        .unwrap_or(0)
 }
 
 fn parse_netstat_value(content: &str, section: &str, key: &str) -> Option<u64> {
@@ -585,6 +735,8 @@ pub fn get_interface_stats(name: &str) -> Result<InterfaceStats, EthError> {
         rx_packets: read_stat_file(&path, "rx_packets"),
         rx_errors: read_stat_file(&path, "rx_errors"),
         rx_dropped: read_stat_file(&path, "rx_dropped"),
+        rx_missed: read_stat_file(&path, "rx_missed_errors"),
+        rx_nohandler: read_stat_file(&path, "rx_nohandler"),
         rx_fifo: read_stat_file(&path, "rx_fifo_errors"),
         rx_frame: read_stat_file(&path, "rx_frame_errors"),
         tx_bytes: read_stat_file(&path, "tx_bytes"),
@@ -1542,7 +1694,7 @@ mod tests {
 
     #[test]
     fn tcp_listen_failures_are_parsed_from_netstat() {
-        let netstat = "TcpExt: SyncookiesSent ListenOverflows ListenDrops\nTcpExt: 1 2 3\n";
+        let netstat = "TcpExt: SyncookiesSent ListenOverflows ListenDrops TCPReqQFullDrop TCPAbortOnMemory\nTcpExt: 1 2 3 4 5\n";
         assert_eq!(
             parse_netstat_value(netstat, "TcpExt:", "ListenOverflows"),
             Some(2)
@@ -1550,6 +1702,37 @@ mod tests {
         assert_eq!(
             parse_netstat_value(netstat, "TcpExt:", "ListenDrops"),
             Some(3)
+        );
+        assert_eq!(
+            parse_netstat_value(netstat, "TcpExt:", "TCPReqQFullDrop"),
+            Some(4)
+        );
+        assert_eq!(
+            parse_netstat_value(netstat, "TcpExt:", "TCPAbortOnMemory"),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn parses_neighbor_states_and_nft_rule_counts() {
+        let mut neighbors = NeighborStats::default();
+        parse_neighbor_json(
+            r#"[
+                {"dst":"10.0.0.1","state":["REACHABLE"]},
+                {"dst":"10.0.0.2","state":["FAILED"]},
+                {"dst":"10.0.0.3","state":["INCOMPLETE"]}
+            ]"#,
+            false,
+            &mut neighbors,
+        );
+        assert_eq!(neighbors.ipv4_total, 3);
+        assert_eq!(neighbors.reachable, 1);
+        assert_eq!(neighbors.failed, 1);
+        assert_eq!(neighbors.incomplete, 1);
+
+        assert_eq!(
+            count_nft_rules(r#"{"nftables":[{"table":{}},{"rule":{}},{"rule":{}}]}"#),
+            2
         );
     }
 

@@ -50,23 +50,28 @@ ethctl route
 ethctl nat
 ```
 
-The profiles use kube-proxy-compatible, CPU-derived conntrack capacity. Settings
-whose correct value depends on RAM, CNI routing, NIC capabilities, or the full
-network path are shown as investigation candidates with a `(?)` suffix and are
-not changed automatically. This
-includes UDP memory pools, socket defaults, ARP policy, reverse-path filtering,
-MTU, queue length, interrupt coalescing, and offloads. Validate those settings
-with workload measurements before applying device-specific candidates from
-`ethctl link`.
+The profiles automatically apply only kube-proxy-compatible conntrack capacity
+and timeout bounds, plus packet forwarding for the gateway profile. Settings
+whose correct value depends on RAM, bandwidth-delay product, application
+timeouts, CNI routing, NIC capabilities, or the full network path are shown as
+investigation candidates with a `(?)` suffix and are not changed automatically.
+This includes socket buffers, listen and device queues, neighbor thresholds,
+ARP policy, reverse-path filtering, MTU, ring size, interrupt coalescing, and
+offloads.
 
 Generated `cmd`, `conf`, and `script` output includes actionable investigation
 candidates as commented-out, syntactically valid settings that must be
 explicitly uncommented after validation.
 
+Use `ethctl stats` before changing candidates. It reports conntrack utilization
+and hash load, softnet pressure, TCP listen/queue/memory failures, neighbor-table
+occupancy and failures, and the detected kube-proxy dataplane/rule count. Use
+`ethctl stats --interface <name>` to include standard NIC missed/drop counters.
+
 The `gateway` profile enables IPv4 and IPv6 forwarding and applies only
-forwarding-relevant conntrack and receive-backlog recommendations. Endpoint TCP
-settings remain observational, and firewall policy, MTU, and VPN-specific
-offloads must be validated for the deployed routing topology.
+kube-proxy-compatible conntrack recommendations. Endpoint TCP settings,
+firewall policy, MTU, queues, and VPN-specific offloads must be validated for
+the deployed routing topology.
 
 ## onm-shell
 
