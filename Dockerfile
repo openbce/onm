@@ -1,7 +1,7 @@
 # =============================================================================
 # Stage: builder - Build environment for onm tools
 # =============================================================================
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 RUN apt-get update && apt-get -y install \
     build-essential protobuf-compiler libudev-dev pkg-config libclang-dev libibverbs-dev libpci-dev \
