@@ -1,3 +1,4 @@
+mod nat;
 mod types;
 
 use futures::TryStreamExt;
@@ -5,6 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+pub use nat::get_nat_rules;
 pub use types::{
     ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
     EthtoolOffload, EthtoolRing, EthtoolSettings, ForwardingSettings, InterfaceStats,
@@ -917,86 +919,6 @@ fn get_interface_name_by_index(index: u32) -> Option<String> {
         }
     }
     None
-}
-
-/// Get NAT rules from nftables and iptables.
-///
-/// This function queries both nftables (via `nft -j list ruleset`) and iptables
-/// (via `iptables -t nat -S`) to extract NAT rules (SNAT, DNAT, MASQUERADE).
-/// Both sources are checked since Linux can have rules in both subsystems
-/// (e.g., Docker uses nftables, Tailscale uses iptables).
-pub fn get_nat_rules() -> Result<NatTable, EthError> {
-    use std::process::Command;
-
-    let mut table = NatTable::default();
-    let mut successful_backends = 0;
-    let mut backend_errors = Vec::new();
-
-    // Try nftables first
-    let output = Command::new("nft").args(["-j", "list", "ruleset"]).output();
-
-    match output {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            match parse_nftables_json(&stdout, &mut table) {
-                Ok(()) => successful_backends += 1,
-                Err(e) => backend_errors.push(format!("nft: {e}")),
-            }
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            backend_errors.push(format!("nft: {}", stderr.trim()));
-        }
-        Err(e) => {
-            backend_errors.push(format!("nft: {e}"));
-        }
-    }
-
-    // Also try iptables (for Tailscale, older systems, etc.)
-    for (cmd, family) in [("iptables", "ip"), ("ip6tables", "ip6")] {
-        let output = Command::new(cmd).args(["-t", "nat", "-S"]).output();
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                parse_iptables_nat(&stdout, family, &mut table);
-                successful_backends += 1;
-            }
-            Ok(out) => {
-                backend_errors.push(format!(
-                    "{cmd}: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ));
-            }
-            Err(e) => {
-                backend_errors.push(format!("{cmd}: {e}"));
-            }
-        }
-    }
-
-    if successful_backends == 0 {
-        return Err(EthError::Internal(format!(
-            "unable to query NAT rules: {}",
-            backend_errors.join("; ")
-        )));
-    }
-
-    // iptables-nft may expose the same rule through both commands.
-    let mut unique: Vec<NatRule> = Vec::with_capacity(table.rules.len());
-    for rule in table.rules.drain(..) {
-        if let Some(existing) = unique
-            .iter_mut()
-            .find(|existing| same_nat_rule(existing, &rule))
-        {
-            existing.packets = existing.packets.max(rule.packets);
-            existing.bytes = existing.bytes.max(rule.bytes);
-        } else {
-            unique.push(rule);
-        }
-    }
-    table.rules = unique;
-
-    Ok(table)
 }
 
 fn same_nat_rule(left: &NatRule, right: &NatRule) -> bool {
