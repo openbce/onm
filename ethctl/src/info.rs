@@ -730,14 +730,22 @@ fn add_sysctl_rows(
         add_info_row_str(
             table,
             "  net.ipv4.tcp_rmem",
-            sysctl.socket_buffer.tcp_rmem.clone(),
-            &format_tcp_mem(s.tcp_rmem),
+            sysctl
+                .socket_buffer
+                .tcp_rmem
+                .as_deref()
+                .map(|value| format_count_list(value, Some(CountFormat::Bytes))),
+            &format_count_list(s.tcp_rmem, Some(CountFormat::Bytes)),
         );
         add_info_row_str(
             table,
             "  net.ipv4.tcp_wmem",
-            sysctl.socket_buffer.tcp_wmem.clone(),
-            &format_tcp_mem(s.tcp_wmem),
+            sysctl
+                .socket_buffer
+                .tcp_wmem
+                .as_deref()
+                .map(|value| format_count_list(value, Some(CountFormat::Bytes))),
+            &format_count_list(s.tcp_wmem, Some(CountFormat::Bytes)),
         );
     } else {
         add_row_tcp_mem(
@@ -799,7 +807,11 @@ fn add_sysctl_rows(
     add_info_row_str(
         table,
         "  net.ipv4.udp_mem (pages)",
-        sysctl.udp.udp_mem.clone(),
+        sysctl
+            .udp
+            .udp_mem
+            .as_deref()
+            .map(|value| format_count_list(value, Some(CountFormat::Decimal))),
         "auto",
     );
 
@@ -1060,10 +1072,26 @@ fn format_size_u32(bytes: u32) -> String {
     format_size(bytes as u64)
 }
 
-fn format_tcp_mem(value: &str) -> String {
+#[derive(Clone, Copy)]
+enum CountFormat {
+    Decimal,
+    Bytes,
+}
+
+fn format_count_list(value: &str, format: Option<CountFormat>) -> String {
     value
         .split_whitespace()
-        .map(|s| s.parse::<u64>().map(format_size).unwrap_or(s.to_string()))
+        .map(|item| match format {
+            Some(CountFormat::Decimal) => item
+                .parse::<u64>()
+                .map(format_count)
+                .unwrap_or(item.to_string()),
+            Some(CountFormat::Bytes) => item
+                .parse::<u64>()
+                .map(format_size)
+                .unwrap_or(item.to_string()),
+            None => item.to_string(),
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -1175,8 +1203,11 @@ fn add_info_row_bytes(table: &mut Table, name: &str, value: Option<u64>, preferr
 fn add_info_row_str(table: &mut Table, name: &str, value: Option<String>, preferred: &str) {
     table.add_row(vec![
         name.to_string(),
-        value.unwrap_or("-".to_string()),
-        investigation_value(preferred),
+        value
+            .as_deref()
+            .map(|value| format_count_list(value, None))
+            .unwrap_or("-".to_string()),
+        investigation_value(&format_count_list(preferred, None)),
     ]);
 }
 
@@ -1209,11 +1240,14 @@ fn add_row_str(
     let suggested_str = if bound.is_str_satisfied(value.as_deref(), suggested) {
         "OK".to_string()
     } else {
-        format!("{}{}", bound.prefix(), suggested)
+        format!("{}{}", bound.prefix(), format_count_list(suggested, None))
     };
     table.add_row(vec![
         name.to_string(),
-        value.unwrap_or("-".to_string()),
+        value
+            .as_deref()
+            .map(|value| format_count_list(value, None))
+            .unwrap_or("-".to_string()),
         suggested_str,
     ]);
 }
@@ -1228,11 +1262,18 @@ fn add_row_tcp_mem(
     let suggested_str = if bound.is_str_satisfied(value.as_deref(), suggested) {
         "OK".to_string()
     } else {
-        format!("{}{}", bound.prefix(), format_tcp_mem(suggested))
+        format!(
+            "{}{}",
+            bound.prefix(),
+            format_count_list(suggested, Some(CountFormat::Bytes))
+        )
     };
     table.add_row(vec![
         name.to_string(),
-        value.map(|v| format_tcp_mem(&v)).unwrap_or("-".to_string()),
+        value
+            .as_deref()
+            .map(|value| format_count_list(value, Some(CountFormat::Bytes)))
+            .unwrap_or("-".to_string()),
         suggested_str,
     ]);
 }
@@ -1797,5 +1838,18 @@ mod tests {
         assert!(TuningProfile::from_str("gateway").unwrap().is_gateway());
         assert!(TuningProfile::from_str("router").unwrap().is_gateway());
         assert!(OutputFormat::from_str("yaml").is_err());
+    }
+
+    #[test]
+    fn count_lists_use_compact_values_and_single_space_separators() {
+        assert_eq!(
+            format_count_list("1520958\t2027945  3041916", Some(CountFormat::Decimal)),
+            "1M 2M 3M"
+        );
+        assert_eq!(
+            format_count_list("4096\t131072  16777216", Some(CountFormat::Bytes)),
+            "4Ki 128Ki 16Mi"
+        );
+        assert_eq!(format_count_list("32768\t  60999", None), "32768 60999");
     }
 }
