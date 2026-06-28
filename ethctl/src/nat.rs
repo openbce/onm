@@ -2,6 +2,8 @@ use comfy_table::{presets::UTF8_FULL, Table};
 use libonm::eth::{self, EthError};
 use std::collections::{HashMap, HashSet};
 
+use crate::format;
+
 pub fn run(chain_filter: Option<&str>) -> Result<(), EthError> {
     let nat_table = eth::get_nat_rules()?;
 
@@ -83,8 +85,8 @@ pub fn run(chain_filter: Option<&str>) -> Result<(), EthError> {
             rule.interface_in.clone().unwrap_or("*".to_string()),
             rule.interface_out.clone().unwrap_or("*".to_string()),
             target,
-            format_count(rule.packets),
-            format_bytes(rule.bytes),
+            format::count(rule.packets),
+            format::bytes(rule.bytes),
         ]);
     }
 
@@ -163,28 +165,6 @@ fn nat_paths(rule: &libonm::eth::NatRule, incoming: &HashMap<ChainKey, Vec<Strin
     paths.sort();
     paths.dedup();
     paths.join(" | ")
-}
-
-fn format_count(count: u64) -> String {
-    if count >= 1_000_000 {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    } else if count >= 1_000 {
-        format!("{:.1}K", count as f64 / 1_000.0)
-    } else {
-        count.to_string()
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1}G", bytes as f64 / 1_073_741_824.0)
-    } else if bytes >= 1_048_576 {
-        format!("{:.1}M", bytes as f64 / 1_048_576.0)
-    } else if bytes >= 1024 {
-        format!("{:.1}K", bytes as f64 / 1024.0)
-    } else {
-        bytes.to_string()
-    }
 }
 
 #[cfg(test)]

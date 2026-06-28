@@ -7,10 +7,10 @@ use std::time::Duration;
 
 pub use types::{
     ArpSettings, ConntrackSettings, ConntrackStats, EthError, EthInterface, EthtoolCoalesce,
-    EthtoolOffload, EthtoolRing, EthtoolSettings, InterfaceStats, InterfaceType, LinkSettings,
-    LinkState, NatRule, NatTable, NatType, NetworkStats, NetworkSysctl, RouteEntry, RouteProtocol,
-    RouteScope, RouteTable, RouteType, RpFilterSettings, SocketBufferSettings, SocketStats,
-    SoftnetCpuStats, SoftnetStats, TcpSettings, UdpSettings,
+    EthtoolOffload, EthtoolRing, EthtoolSettings, ForwardingSettings, InterfaceStats,
+    InterfaceType, LinkSettings, LinkState, NatRule, NatTable, NatType, NetworkStats,
+    NetworkSysctl, RouteEntry, RouteProtocol, RouteScope, RouteTable, RouteType, RpFilterSettings,
+    SocketBufferSettings, SocketStats, SoftnetCpuStats, SoftnetStats, TcpSettings, UdpSettings,
 };
 
 const SYS_CLASS_NET: &str = "/sys/class/net";
@@ -299,6 +299,10 @@ pub fn get_network_sysctl() -> NetworkSysctl {
             all: read_sysctl_u64("net.ipv4.conf.all.rp_filter"),
             default: read_sysctl_u64("net.ipv4.conf.default.rp_filter"),
             interfaces: get_interface_rp_filters(),
+        },
+        forwarding: ForwardingSettings {
+            ipv4: read_sysctl_u64("net.ipv4.ip_forward"),
+            ipv6: read_sysctl_u64("net.ipv6.conf.all.forwarding"),
         },
     }
 }

@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 use tracing_subscriber::{filter::EnvFilter, filter::LevelFilter, fmt, prelude::*};
 
+mod format;
 mod info;
 mod link;
 mod list;
@@ -25,7 +26,7 @@ enum Commands {
     List,
     /// Show network tuning info with all interfaces and suggested values
     Info {
-        /// Tuning profile for suggested values: control-plane, worker (default: worker)
+        /// Tuning profile for suggested values: control-plane, worker, gateway (default: worker)
         #[arg(short, long, default_value = "worker")]
         profile: String,
         /// Output suggested values as commands: cmd, conf, script
@@ -39,7 +40,7 @@ enum Commands {
     Link {
         #[arg(short, long)]
         name: String,
-        /// Tuning profile for suggested values: control-plane, worker (default: worker)
+        /// Tuning profile for suggested values: control-plane, worker, gateway (default: worker)
         #[arg(short, long, default_value = "worker")]
         profile: String,
         /// Generate commands to apply suggested values: cmd, conf, script (default: cmd)

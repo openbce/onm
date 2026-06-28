@@ -3,3 +3,4 @@ target-*/
 release/
 *.tar.gz
 .sisyphus/
+.DS_Store

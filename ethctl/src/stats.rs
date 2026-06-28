@@ -1,6 +1,8 @@
 use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
 use libonm::eth::{self, EthError};
 
+use crate::format;
+
 pub fn run(iface_name: Option<&str>) -> Result<(), EthError> {
     let stats = eth::get_network_stats();
 
@@ -22,11 +24,11 @@ fn print_conntrack_stats(ct: &eth::ConntrackStats) {
 
     table.add_row(vec![
         "Current Connections".to_string(),
-        ct.current.map(|v| v.to_string()).unwrap_or("-".to_string()),
+        ct.current.map(format::count).unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "Max Connections".to_string(),
-        ct.max.map(|v| v.to_string()).unwrap_or("-".to_string()),
+        ct.max.map(format::count).unwrap_or("-".to_string()),
     ]);
 
     let usage_str = ct
@@ -50,17 +52,17 @@ fn print_conntrack_stats(ct: &eth::ConntrackStats) {
     table.add_row(vec![
         "Insert Failed".to_string(),
         ct.insert_failed
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "Drops".to_string(),
-        ct.drop.map(|v| v.to_string()).unwrap_or("-".to_string()),
+        ct.drop.map(format::count).unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "Early Drops".to_string(),
         ct.early_drop
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
 
@@ -75,20 +77,20 @@ fn print_softnet_stats(sn: &eth::SoftnetStats) {
 
     summary.add_row(vec![
         "Total Processed".to_string(),
-        sn.total_processed.to_string(),
+        format::count(sn.total_processed),
     ]);
 
     let dropped_cell = if sn.total_dropped > 0 {
-        Cell::new(sn.total_dropped.to_string()).fg(Color::Red)
+        Cell::new(format::count(sn.total_dropped)).fg(Color::Red)
     } else {
-        Cell::new(sn.total_dropped.to_string()).fg(Color::Green)
+        Cell::new(format::count(sn.total_dropped)).fg(Color::Green)
     };
     summary.add_row(vec![Cell::new("Total Dropped"), dropped_cell]);
 
     let squeeze_cell = if sn.total_time_squeeze > 0 {
-        Cell::new(sn.total_time_squeeze.to_string()).fg(Color::Yellow)
+        Cell::new(format::count(sn.total_time_squeeze)).fg(Color::Yellow)
     } else {
-        Cell::new(sn.total_time_squeeze.to_string()).fg(Color::Green)
+        Cell::new(format::count(sn.total_time_squeeze)).fg(Color::Green)
     };
     summary.add_row(vec![Cell::new("Total Time Squeeze"), squeeze_cell]);
 
@@ -110,24 +112,24 @@ fn print_softnet_stats(sn: &eth::SoftnetStats) {
 
         for cpu in &sn.cpus {
             let dropped_cell = if cpu.dropped > 0 {
-                Cell::new(cpu.dropped.to_string()).fg(Color::Red)
+                Cell::new(format::count(cpu.dropped)).fg(Color::Red)
             } else {
-                Cell::new(cpu.dropped.to_string())
+                Cell::new(format::count(cpu.dropped))
             };
             let squeeze_cell = if cpu.time_squeeze > 0 {
-                Cell::new(cpu.time_squeeze.to_string()).fg(Color::Yellow)
+                Cell::new(format::count(cpu.time_squeeze)).fg(Color::Yellow)
             } else {
-                Cell::new(cpu.time_squeeze.to_string())
+                Cell::new(format::count(cpu.time_squeeze))
             };
 
             cpu_table.add_row(vec![
                 Cell::new(format!("CPU{}", cpu.cpu)),
-                Cell::new(cpu.processed.to_string()),
+                Cell::new(format::count(cpu.processed)),
                 dropped_cell,
                 squeeze_cell,
-                Cell::new(cpu.cpu_collision.to_string()),
-                Cell::new(cpu.received_rps.to_string()),
-                Cell::new(cpu.flow_limit_count.to_string()),
+                Cell::new(format::count(cpu.cpu_collision)),
+                Cell::new(format::count(cpu.received_rps)),
+                Cell::new(format::count(cpu.flow_limit_count)),
             ]);
         }
 
@@ -144,73 +146,73 @@ fn print_socket_stats(sock: &eth::SocketStats) {
     table.add_row(vec![
         "TCP In Use".to_string(),
         sock.tcp_inuse
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "TCP Orphan".to_string(),
         sock.tcp_orphan
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "TCP Time-Wait".to_string(),
         sock.tcp_tw
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "TCP Allocated".to_string(),
         sock.tcp_alloc
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "TCP Memory (pages)".to_string(),
         sock.tcp_mem
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "UDP In Use".to_string(),
         sock.udp_inuse
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "UDP Memory (pages)".to_string(),
         sock.udp_mem
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "RAW In Use".to_string(),
         sock.raw_inuse
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "FRAG In Use".to_string(),
         sock.frag_inuse
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "FRAG Memory".to_string(),
         sock.frag_memory
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "TCP Listen Overflows".to_string(),
         sock.listen_overflows
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
     table.add_row(vec![
         "TCP Listen Drops".to_string(),
         sock.listen_drops
-            .map(|v| v.to_string())
+            .map(format::count)
             .unwrap_or("-".to_string()),
     ]);
 
@@ -227,75 +229,56 @@ fn print_interface_stats(name: &str) -> Result<(), EthError> {
 
     table.add_row(vec![
         "Bytes".to_string(),
-        format_bytes(stats.rx_bytes),
-        format_bytes(stats.tx_bytes),
+        format::bytes(stats.rx_bytes),
+        format::bytes(stats.tx_bytes),
     ]);
     table.add_row(vec![
         "Packets".to_string(),
-        stats.rx_packets.to_string(),
-        stats.tx_packets.to_string(),
+        format::count(stats.rx_packets),
+        format::count(stats.tx_packets),
     ]);
 
     let rx_err = if stats.rx_errors > 0 {
-        Cell::new(stats.rx_errors.to_string()).fg(Color::Red)
+        Cell::new(format::count(stats.rx_errors)).fg(Color::Red)
     } else {
-        Cell::new(stats.rx_errors.to_string())
+        Cell::new(format::count(stats.rx_errors))
     };
     let tx_err = if stats.tx_errors > 0 {
-        Cell::new(stats.tx_errors.to_string()).fg(Color::Red)
+        Cell::new(format::count(stats.tx_errors)).fg(Color::Red)
     } else {
-        Cell::new(stats.tx_errors.to_string())
+        Cell::new(format::count(stats.tx_errors))
     };
     table.add_row(vec![Cell::new("Errors"), rx_err, tx_err]);
 
     let rx_drop = if stats.rx_dropped > 0 {
-        Cell::new(stats.rx_dropped.to_string()).fg(Color::Red)
+        Cell::new(format::count(stats.rx_dropped)).fg(Color::Red)
     } else {
-        Cell::new(stats.rx_dropped.to_string())
+        Cell::new(format::count(stats.rx_dropped))
     };
     let tx_drop = if stats.tx_dropped > 0 {
-        Cell::new(stats.tx_dropped.to_string()).fg(Color::Red)
+        Cell::new(format::count(stats.tx_dropped)).fg(Color::Red)
     } else {
-        Cell::new(stats.tx_dropped.to_string())
+        Cell::new(format::count(stats.tx_dropped))
     };
     table.add_row(vec![Cell::new("Dropped"), rx_drop, tx_drop]);
 
     table.add_row(vec![
         "FIFO Errors".to_string(),
-        stats.rx_fifo.to_string(),
-        stats.tx_fifo.to_string(),
+        format::count(stats.rx_fifo),
+        format::count(stats.tx_fifo),
     ]);
     table.add_row(vec![
         "Frame/Carrier".to_string(),
-        stats.rx_frame.to_string(),
-        stats.tx_carrier.to_string(),
+        format::count(stats.rx_frame),
+        format::count(stats.tx_carrier),
     ]);
     table.add_row(vec![
         "Collisions".to_string(),
         "-".to_string(),
-        stats.tx_collisions.to_string(),
+        format::count(stats.tx_collisions),
     ]);
 
     println!("{table}");
 
     Ok(())
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if bytes >= TB {
-        format!("{:.2} TB", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
 }

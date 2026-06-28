@@ -158,6 +158,12 @@ pub struct RpFilterSettings {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ForwardingSettings {
+    pub ipv4: Option<u64>,
+    pub ipv6: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NetworkSysctl {
     pub conntrack: ConntrackSettings,
     pub socket_buffer: SocketBufferSettings,
@@ -165,6 +171,7 @@ pub struct NetworkSysctl {
     pub udp: UdpSettings,
     pub arp: ArpSettings,
     pub rp_filter: RpFilterSettings,
+    pub forwarding: ForwardingSettings,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

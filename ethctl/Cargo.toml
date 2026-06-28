@@ -14,3 +14,4 @@ tokio = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 comfy-table = "7.2.2"
+number_prefix = "0.4"

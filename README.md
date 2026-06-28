@@ -33,6 +33,9 @@ ethctl link --name eth0
 # Show control-plane tuning for 10k-node cluster
 ethctl info --profile control-plane
 
+# Show routing and forwarding checks for a gateway
+ethctl info --profile gateway
+
 # Generate sysctl commands
 ethctl info --output cmd
 
@@ -49,11 +52,21 @@ ethctl nat
 
 The profiles use kube-proxy-compatible, CPU-derived conntrack capacity. Settings
 whose correct value depends on RAM, CNI routing, NIC capabilities, or the full
-network path are reported as `observe` and are not changed automatically. This
+network path are shown as investigation candidates with a `(?)` suffix and are
+not changed automatically. This
 includes UDP memory pools, socket defaults, ARP policy, reverse-path filtering,
 MTU, queue length, interrupt coalescing, and offloads. Validate those settings
 with workload measurements before applying device-specific candidates from
 `ethctl link`.
+
+Generated `cmd`, `conf`, and `script` output includes actionable investigation
+candidates as commented-out, syntactically valid settings that must be
+explicitly uncommented after validation.
+
+The `gateway` profile enables IPv4 and IPv6 forwarding and applies only
+forwarding-relevant conntrack and receive-backlog recommendations. Endpoint TCP
+settings remain observational, and firewall policy, MTU, and VPN-specific
+offloads must be validated for the deployed routing topology.
 
 ## onm-shell
 
