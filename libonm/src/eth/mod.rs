@@ -75,22 +75,74 @@ fn is_network_device(path: &Path) -> bool {
     false
 }
 
-fn get_interface_type(path: &Path) -> InterfaceType {
-    // Physical interfaces have a device symlink pointing to a PCI device
-    // Virtual interfaces (veth, bridge, etc.) don't have a real PCI device
+fn get_interface_type(path: &Path, name: &str, kind: Option<&str>) -> InterfaceType {
     let device_path = path.join("device");
-    if !device_path.exists() {
-        return InterfaceType::Virtual;
-    }
+    let has_physical_device = device_path.exists()
+        && device_path
+            .canonicalize()
+            .map(|resolved| !resolved.to_string_lossy().contains("/virtual/"))
+            .unwrap_or(true);
+    let arphrd = read_sysfs_file(path, "type").and_then(|value| value.parse::<u32>().ok());
 
-    // Check if device path contains "virtual" (e.g., /sys/devices/virtual/...)
-    if let Ok(resolved) = device_path.canonicalize() {
-        if resolved.to_string_lossy().contains("/virtual/") {
-            return InterfaceType::Virtual;
+    classify_interface_type(name, kind, has_physical_device, arphrd)
+}
+
+fn classify_interface_type(
+    name: &str,
+    kind: Option<&str>,
+    has_physical_device: bool,
+    arphrd: Option<u32>,
+) -> InterfaceType {
+    match kind {
+        Some("veth") => return InterfaceType::Veth,
+        Some("bridge") => return InterfaceType::Bridge,
+        Some("bond") => return InterfaceType::Bond,
+        Some("vlan") => return InterfaceType::Vlan,
+        Some("vxlan") => return InterfaceType::Vxlan,
+        Some("wireguard") => return InterfaceType::WireGuard,
+        Some("tun" | "tap") => return InterfaceType::Tun,
+        Some("macvlan") => return InterfaceType::Macvlan,
+        Some("ipvlan") => return InterfaceType::Ipvlan,
+        Some("dummy") => return InterfaceType::Dummy,
+        Some("gre" | "gretap" | "ipip" | "sit" | "ip6tnl" | "geneve" | "erspan") => {
+            return InterfaceType::Tunnel;
         }
+        _ => {}
     }
 
-    InterfaceType::Physical
+    if name.starts_with("veth") || name.starts_with("cali") {
+        return InterfaceType::Veth;
+    }
+    if name.starts_with("vxlan") {
+        return InterfaceType::Vxlan;
+    }
+    if name.starts_with("wg") {
+        return InterfaceType::WireGuard;
+    }
+    if name.starts_with("tun") || name.starts_with("tap") || name.starts_with("tailscale") {
+        return InterfaceType::Tun;
+    }
+    if name.starts_with("macvlan") {
+        return InterfaceType::Macvlan;
+    }
+    if name.starts_with("ipvlan") {
+        return InterfaceType::Ipvlan;
+    }
+    if name.starts_with("dummy") {
+        return InterfaceType::Dummy;
+    }
+
+    match arphrd {
+        Some(772) => return InterfaceType::Loopback,
+        Some(768 | 769 | 776 | 778 | 823) => return InterfaceType::Tunnel,
+        _ => {}
+    }
+
+    if has_physical_device {
+        InterfaceType::Physical
+    } else {
+        InterfaceType::Virtual
+    }
 }
 
 fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
@@ -134,15 +186,14 @@ fn read_interface(name: &str, path: &Path) -> Result<EthInterface, EthError> {
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
-    let interface_type = get_interface_type(path);
-
     let master = path
         .join("master")
         .read_link()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
-    let kind = read_uevent_value(path, "DEVTYPE").or_else(|| detect_interface_kind(path, name));
+    let kind = detect_interface_kind(path, name).or_else(|| read_uevent_value(path, "DEVTYPE"));
+    let interface_type = get_interface_type(path, name, kind.as_deref());
 
     Ok(EthInterface {
         name: name.to_string(),
@@ -176,14 +227,29 @@ fn detect_interface_kind(path: &Path, name: &str) -> Option<String> {
     if path.join("bonding_slave").exists() {
         return Some("bond_slave".to_string());
     }
-    if name.starts_with("veth") {
+    if Path::new("/proc/net/vlan").join(name).exists() {
+        return Some("vlan".to_string());
+    }
+    if name.starts_with("veth") || name.starts_with("cali") {
         return Some("veth".to_string());
     }
     if name.starts_with("vxlan") {
         return Some("vxlan".to_string());
     }
-    if name.starts_with("cali") {
-        return Some("veth".to_string());
+    if name.starts_with("wg") {
+        return Some("wireguard".to_string());
+    }
+    if name.starts_with("tun") || name.starts_with("tap") || name.starts_with("tailscale") {
+        return Some("tun".to_string());
+    }
+    if name.starts_with("macvlan") {
+        return Some("macvlan".to_string());
+    }
+    if name.starts_with("ipvlan") {
+        return Some("ipvlan".to_string());
+    }
+    if name.starts_with("dummy") {
+        return Some("dummy".to_string());
     }
     None
 }
@@ -1432,6 +1498,46 @@ mod tests {
             "entries insert_failed drop early_drop\n00000001 00000002 00000003 00000004\n00000001 00000005 00000006 00000007\n",
         );
         assert_eq!(counters, (Some(7), Some(9), Some(11)));
+    }
+
+    #[test]
+    fn classifies_physical_and_common_virtual_interface_types() {
+        assert_eq!(
+            classify_interface_type("eth0", None, true, Some(1)),
+            InterfaceType::Physical
+        );
+        assert_eq!(
+            classify_interface_type("cali123", None, false, Some(1)),
+            InterfaceType::Veth
+        );
+        assert_eq!(
+            classify_interface_type("br0", Some("bridge"), false, Some(1)),
+            InterfaceType::Bridge
+        );
+        assert_eq!(
+            classify_interface_type("bond0", Some("bond"), false, Some(1)),
+            InterfaceType::Bond
+        );
+        assert_eq!(
+            classify_interface_type("eth0.100", Some("vlan"), false, Some(1)),
+            InterfaceType::Vlan
+        );
+        assert_eq!(
+            classify_interface_type("vxlan.calico", Some("vxlan"), false, Some(1)),
+            InterfaceType::Vxlan
+        );
+        assert_eq!(
+            classify_interface_type("wg0", None, false, Some(65534)),
+            InterfaceType::WireGuard
+        );
+        assert_eq!(
+            classify_interface_type("gre0", None, false, Some(778)),
+            InterfaceType::Tunnel
+        );
+        assert_eq!(
+            classify_interface_type("unknown0", None, false, Some(1)),
+            InterfaceType::Virtual
+        );
     }
 
     #[test]

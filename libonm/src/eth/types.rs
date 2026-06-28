@@ -36,16 +36,46 @@ impl ToString for LinkState {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InterfaceType {
     Physical,
+    Veth,
+    Bridge,
+    Bond,
+    Vlan,
+    Vxlan,
+    Tunnel,
+    Tun,
+    WireGuard,
+    Macvlan,
+    Ipvlan,
+    Dummy,
+    Loopback,
     Virtual,
+}
+
+impl InterfaceType {
+    pub fn is_physical(&self) -> bool {
+        matches!(self, InterfaceType::Physical)
+    }
 }
 
 impl ToString for InterfaceType {
     fn to_string(&self) -> String {
         match self {
             InterfaceType::Physical => "physical".to_string(),
+            InterfaceType::Veth => "veth".to_string(),
+            InterfaceType::Bridge => "bridge".to_string(),
+            InterfaceType::Bond => "bond".to_string(),
+            InterfaceType::Vlan => "vlan".to_string(),
+            InterfaceType::Vxlan => "vxlan".to_string(),
+            InterfaceType::Tunnel => "tunnel".to_string(),
+            InterfaceType::Tun => "tun".to_string(),
+            InterfaceType::WireGuard => "wireguard".to_string(),
+            InterfaceType::Macvlan => "macvlan".to_string(),
+            InterfaceType::Ipvlan => "ipvlan".to_string(),
+            InterfaceType::Dummy => "dummy".to_string(),
+            InterfaceType::Loopback => "loopback".to_string(),
             InterfaceType::Virtual => "virtual".to_string(),
         }
     }

@@ -344,6 +344,7 @@ fn investigation_settings(
     profile: TuningProfile,
     s: &SuggestedValues,
     sysctl: &eth::NetworkSysctl,
+    interfaces: &[eth::EthInterface],
 ) -> Vec<(String, String)> {
     let mut settings = vec![
         (
@@ -398,12 +399,19 @@ fn investigation_settings(
         ),
     ];
 
-    settings.extend(sysctl.rp_filter.interfaces.iter().map(|(name, _)| {
-        (
-            format!("net.ipv4.conf.{name}.rp_filter"),
-            s.rp_filter.to_string(),
-        )
-    }));
+    settings.extend(
+        sysctl
+            .rp_filter
+            .interfaces
+            .iter()
+            .filter(|(name, _)| is_physical_interface(name, interfaces))
+            .map(|(name, _)| {
+                (
+                    format!("net.ipv4.conf.{name}.rp_filter"),
+                    s.rp_filter.to_string(),
+                )
+            }),
+    );
 
     if profile.is_gateway() {
         settings.extend([
@@ -456,10 +464,11 @@ fn print_investigation_settings(
     profile: TuningProfile,
     s: &SuggestedValues,
     sysctl: &eth::NetworkSysctl,
+    interfaces: &[eth::EthInterface],
 ) {
     println!();
     println!("# Preferred values requiring investigation (not applied; uncomment explicitly):");
-    for (key, value) in investigation_settings(profile, s, sysctl) {
+    for (key, value) in investigation_settings(profile, s, sysctl, interfaces) {
         println!("{}", investigation_output_line(format, &key, &value));
     }
 }
@@ -487,7 +496,8 @@ pub fn run(profile_str: &str, output: Option<&str>, backup: Option<&str>) -> Res
 
     if let Some(fmt) = output {
         let format = OutputFormat::from_str(fmt)?;
-        generate_sysctl_output(profile, format);
+        let interfaces = eth::list_interfaces()?;
+        generate_sysctl_output(profile, format, &interfaces);
         return Ok(());
     }
 
@@ -501,7 +511,7 @@ pub fn run(profile_str: &str, output: Option<&str>, backup: Option<&str>) -> Res
     add_first_section(&mut table, "Overview");
     table.add_row(vec!["  Profile", profile.name(), "-"]);
 
-    add_sysctl_rows(&mut table, &sysctl, &s, profile);
+    add_sysctl_rows(&mut table, &sysctl, &s, profile, &interfaces);
 
     println!("{table}");
     println!();
@@ -565,6 +575,7 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
     use libonm::eth;
 
     let sysctl = eth::get_network_sysctl();
+    let interfaces = eth::list_interfaces().unwrap_or_default();
     let s = SuggestedValues::for_profile(profile);
 
     let mut table = Table::new();
@@ -573,7 +584,7 @@ pub fn print_sysctl_tables(profile: TuningProfile) {
     add_first_section(&mut table, "Overview");
     table.add_row(vec!["  Profile", profile.name(), "-"]);
 
-    add_sysctl_rows(&mut table, &sysctl, &s, profile);
+    add_sysctl_rows(&mut table, &sysctl, &s, profile, &interfaces);
 
     println!("{table}");
 }
@@ -583,6 +594,7 @@ fn add_sysctl_rows(
     sysctl: &eth::NetworkSysctl,
     s: &SuggestedValues,
     profile: TuningProfile,
+    interfaces: &[eth::EthInterface],
 ) {
     use BoundType::{Max, Min};
 
@@ -982,13 +994,19 @@ fn add_sysctl_rows(
         &s.rp_filter.to_string(),
     );
     for (name, value) in &sysctl.rp_filter.interfaces {
-        add_info_row(
-            table,
-            &format!("  net.ipv4.conf.{name}.rp_filter"),
-            Some(*value),
-            &s.rp_filter.to_string(),
-        );
+        let setting = format!("  net.ipv4.conf.{name}.rp_filter");
+        if is_physical_interface(name, interfaces) {
+            add_info_row(table, &setting, Some(*value), &s.rp_filter.to_string());
+        } else {
+            table.add_row(vec![setting, value.to_string(), "not managed".to_string()]);
+        }
     }
+}
+
+fn is_physical_interface(name: &str, interfaces: &[eth::EthInterface]) -> bool {
+    interfaces
+        .iter()
+        .any(|interface| interface.name == name && interface.interface_type.is_physical())
 }
 
 pub async fn print_link_tables(name: &str, profile: TuningProfile) -> Result<(), EthError> {
@@ -1396,7 +1414,11 @@ pub fn generate_backup_output(format: OutputFormat) {
     }
 }
 
-pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
+pub fn generate_sysctl_output(
+    profile: TuningProfile,
+    format: OutputFormat,
+    interfaces: &[eth::EthInterface],
+) {
     use libonm::eth;
     use BoundType::{Max, Min};
 
@@ -1574,7 +1596,7 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                     println!("sysctl -w '{}={}'", key, value);
                 }
             }
-            print_investigation_settings(format, profile, &s, &sysctl);
+            print_investigation_settings(format, profile, &s, &sysctl, interfaces);
             println!("# Device tuning is topology-specific; inspect one NIC with: ethctl link --name <iface>");
             if profile.is_gateway() {
                 println!(
@@ -1593,7 +1615,7 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                     println!("{} = {}", key, value);
                 }
             }
-            print_investigation_settings(format, profile, &s, &sysctl);
+            print_investigation_settings(format, profile, &s, &sysctl, interfaces);
             println!();
             println!("# Device tuning is intentionally omitted; MTU, queues, coalescing, and offloads depend on the NIC and CNI path.");
             if profile.is_gateway() {
@@ -1615,7 +1637,7 @@ pub fn generate_sysctl_output(profile: TuningProfile, format: OutputFormat) {
                     println!("sysctl -w '{}={}'", key, value);
                 }
             }
-            print_investigation_settings(format, profile, &s, &sysctl);
+            print_investigation_settings(format, profile, &s, &sysctl, interfaces);
             println!();
             println!("# Device tuning is intentionally omitted; use ethctl link after validating the NIC and end-to-end path.");
             if profile.is_gateway() {
@@ -1804,11 +1826,27 @@ mod tests {
 
     #[test]
     fn generated_comments_include_profile_investigation_candidates() {
-        let sysctl = eth::NetworkSysctl::default();
+        let mut sysctl = eth::NetworkSysctl::default();
+        sysctl.rp_filter.interfaces = vec![("eth0".into(), 1), ("cali123".into(), 0)];
+
+        let mut physical = eth::EthInterface::default();
+        physical.name = "eth0".into();
+        physical.interface_type = eth::InterfaceType::Physical;
+        let mut virtual_interface = eth::EthInterface::default();
+        virtual_interface.name = "cali123".into();
+        let interfaces = vec![physical, virtual_interface];
+
         let gateway = SuggestedValues::for_profile(TuningProfile::Gateway);
-        let gateway_settings = investigation_settings(TuningProfile::Gateway, &gateway, &sysctl);
+        let gateway_settings =
+            investigation_settings(TuningProfile::Gateway, &gateway, &sysctl, &interfaces);
         assert!(gateway_settings
             .contains(&("net.ipv4.conf.all.rp_filter".to_string(), "2".to_string())));
+        assert!(gateway_settings
+            .iter()
+            .any(|(key, _)| key == "net.ipv4.conf.eth0.rp_filter"));
+        assert!(!gateway_settings
+            .iter()
+            .any(|(key, _)| key == "net.ipv4.conf.cali123.rp_filter"));
         assert!(gateway_settings
             .iter()
             .any(|(key, _)| key == "net.core.rmem_max"));
@@ -1817,7 +1855,8 @@ mod tests {
             .any(|(key, _)| key == "net.ipv4.ip_forward"));
 
         let worker = SuggestedValues::for_profile(TuningProfile::Worker);
-        let worker_settings = investigation_settings(TuningProfile::Worker, &worker, &sysctl);
+        let worker_settings =
+            investigation_settings(TuningProfile::Worker, &worker, &sysctl, &interfaces);
         assert!(worker_settings
             .iter()
             .any(|(key, value)| key == "net.ipv4.ip_forward" && value == "1"));
