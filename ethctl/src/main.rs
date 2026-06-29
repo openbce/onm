@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             profile,
             output,
             backup,
-        } => info::run(&profile, output.as_deref(), backup.as_deref())?,
+        } => info::run(&profile, output.as_deref(), backup.as_deref()).await?,
         Commands::Link {
             name,
             profile,

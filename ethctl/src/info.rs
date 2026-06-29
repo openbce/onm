@@ -357,7 +357,11 @@ fn investigation_output_line(format: OutputFormat, key: &str, value: &str) -> St
     }
 }
 
-pub fn run(profile_str: &str, output: Option<&str>, backup: Option<&str>) -> Result<(), EthError> {
+pub async fn run(
+    profile_str: &str,
+    output: Option<&str>,
+    backup: Option<&str>,
+) -> Result<(), EthError> {
     let profile = TuningProfile::from_str(profile_str)?;
 
     if let Some(fmt) = backup {
@@ -375,6 +379,7 @@ pub fn run(profile_str: &str, output: Option<&str>, backup: Option<&str>) -> Res
         let format = OutputFormat::from_str(fmt)?;
         let interfaces = eth::list_interfaces()?;
         generate_sysctl_output(profile, format, &interfaces);
+        print_device_candidates(profile, &interfaces).await;
         return Ok(());
     }
 
@@ -1270,7 +1275,6 @@ pub fn generate_sysctl_output(
                 }
             }
             print_investigation_settings(format, profile, &s, &sysctl, interfaces);
-            println!("# Device tuning is topology-specific; inspect one NIC with: ethctl link --name <iface>");
             if profile.is_gateway() {
                 println!(
                     "# Verify that the firewall forwarding policy permits only intended traffic."
@@ -1289,8 +1293,6 @@ pub fn generate_sysctl_output(
                 }
             }
             print_investigation_settings(format, profile, &s, &sysctl, interfaces);
-            println!();
-            println!("# Device tuning is intentionally omitted; MTU, queues, coalescing, and offloads depend on the NIC and CNI path.");
             if profile.is_gateway() {
                 println!("# Verify firewall forwarding policy separately; this profile does not modify firewall rules.");
             }
@@ -1311,14 +1313,114 @@ pub fn generate_sysctl_output(
                 }
             }
             print_investigation_settings(format, profile, &s, &sysctl, interfaces);
-            println!();
-            println!("# Device tuning is intentionally omitted; use ethctl link after validating the NIC and end-to-end path.");
             if profile.is_gateway() {
                 println!("# Firewall forwarding policy is not changed by this script.");
             }
             println!("echo 'Network sysctl tuning applied successfully'");
         }
     }
+}
+
+async fn print_device_candidates(profile: TuningProfile, interfaces: &[eth::EthInterface]) {
+    let suggested = SuggestedValues::for_profile(profile);
+    println!();
+    println!("# Physical-interface candidates (not applied; uncomment after validation):");
+
+    for interface in interfaces
+        .iter()
+        .filter(|interface| interface.interface_type.is_physical())
+    {
+        let name = &interface.name;
+        let link = match eth::get_link_settings(name).await {
+            Ok(link) => link,
+            Err(error) => {
+                println!("# {name}: unable to query link settings: {error}");
+                continue;
+            }
+        };
+        let ethtool = match eth::get_ethtool_settings(name).await {
+            Ok(ethtool) => ethtool,
+            Err(error) => {
+                println!("# {name}: unable to query ethtool settings: {error}");
+                continue;
+            }
+        };
+
+        let lines = device_candidate_lines(name, &suggested, &link, &ethtool);
+        if lines.is_empty() {
+            println!("# {name}: supported settings already match the starting candidates");
+        } else {
+            println!("# {name}:");
+            for line in lines {
+                println!("# {line}");
+            }
+        }
+    }
+}
+
+fn device_candidate_lines(
+    name: &str,
+    suggested: &SuggestedValues,
+    link: &eth::LinkSettings,
+    ethtool: &eth::EthtoolSettings,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let ring_rx = safe_ring_target(
+        suggested.ring_rx as u32,
+        ethtool.ring.rx_max,
+        ethtool.ring.rx,
+    );
+    let ring_tx = safe_ring_target(
+        suggested.ring_tx as u32,
+        ethtool.ring.tx_max,
+        ethtool.ring.tx,
+    );
+    if let (Some(rx), Some(tx)) = (ring_rx, ring_tx) {
+        if ethtool.ring.rx != Some(rx) || ethtool.ring.tx != Some(tx) {
+            lines.push(format!("ethtool -G {name} rx {rx} tx {tx}"));
+        }
+    }
+
+    if link.txqueuelen != Some(suggested.txqueuelen as u32) {
+        lines.push(format!(
+            "ip link set dev {name} txqueuelen {}",
+            suggested.txqueuelen
+        ));
+    }
+    if link.mtu != Some(suggested.mtu as u32) {
+        lines.push(format!("ip link set dev {name} mtu {}", suggested.mtu));
+    }
+
+    let mut coalesce = Vec::new();
+    if ethtool.coalesce.rx_usecs.is_some()
+        && ethtool.coalesce.rx_usecs != Some(suggested.coalesce_rx_usecs as u32)
+    {
+        coalesce.push(format!("rx-usecs {}", suggested.coalesce_rx_usecs));
+    }
+    if ethtool.coalesce.tx_usecs.is_some()
+        && ethtool.coalesce.tx_usecs != Some(suggested.coalesce_tx_usecs as u32)
+    {
+        coalesce.push(format!("tx-usecs {}", suggested.coalesce_tx_usecs));
+    }
+    if !coalesce.is_empty() {
+        lines.push(format!("ethtool -C {name} {}", coalesce.join(" ")));
+    }
+
+    let mut offloads = Vec::new();
+    for (key, current, preferred) in [
+        ("tso", ethtool.offload.tso, suggested.offload_tso),
+        ("gso", ethtool.offload.gso, suggested.offload_gso),
+        ("gro", ethtool.offload.gro, suggested.offload_gro),
+    ] {
+        if current.is_some() && current != Some(preferred) {
+            offloads.push(format!("{key} {}", if preferred { "on" } else { "off" }));
+        }
+    }
+    if !offloads.is_empty() {
+        lines.push(format!("ethtool -K {name} {}", offloads.join(" ")));
+    }
+
+    lines
 }
 
 pub async fn generate_link_output(
@@ -1459,6 +1561,33 @@ mod tests {
         assert_eq!(values.txqueuelen, 2_000);
         assert_eq!(values.mtu, 1_500);
         assert_eq!(values.conntrack_max, suggested_conntrack_max());
+    }
+
+    #[test]
+    fn device_commands_include_only_supported_changes() {
+        let suggested = SuggestedValues::for_profile(TuningProfile::Gateway);
+        let mut link = eth::LinkSettings::default();
+        link.txqueuelen = Some(1_000);
+        link.mtu = Some(1_500);
+
+        let mut ethtool = eth::EthtoolSettings::default();
+        ethtool.ring.rx = Some(1_024);
+        ethtool.ring.rx_max = Some(16_384);
+        ethtool.ring.tx = Some(1_024);
+        ethtool.ring.tx_max = Some(1_024);
+        ethtool.coalesce.rx_usecs = Some(20);
+        ethtool.coalesce.tx_usecs = Some(64);
+        ethtool.offload.gso = Some(true);
+        ethtool.offload.gro = Some(true);
+
+        assert_eq!(
+            device_candidate_lines("ens7", &suggested, &link, &ethtool),
+            vec![
+                "ethtool -G ens7 rx 2048 tx 1024",
+                "ip link set dev ens7 txqueuelen 2000",
+                "ethtool -C ens7 rx-usecs 50 tx-usecs 50",
+            ]
+        );
     }
 
     #[test]
