@@ -7,18 +7,23 @@ The lib for open network management.
 ## xpuctl
 
 The command line to manage XPU.
+See the [xpuctl guide](docs/xpuctl/README.md) for configuration and examples.
 
 ## hcactl
 
 The command line to manage HCA of host.
+See the [hcactl guide](docs/hcactl/README.md) for installation and examples.
 
 ## smctl
 
 The command line to manage subnet manager.
+See the [smctl guide](docs/smctl/README.md) for configuration and examples.
 
 ## ethctl
 
 The command line to manage Ethernet interfaces and network sysctl tuning.
+See the [ethctl guide](docs/ethctl/README.md) for complete command, profile, build,
+and operational documentation.
 
 ```bash
 # List interfaces

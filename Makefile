@@ -48,6 +48,7 @@ release: build
 		cp target/release/$$bin $(RELEASE_DIR)/$(RELEASE_NAME)/; \
 	done
 	@cp README.md LICENSE $(RELEASE_DIR)/$(RELEASE_NAME)/
+	@cp -R docs $(RELEASE_DIR)/$(RELEASE_NAME)/
 	@cd $(RELEASE_DIR) && tar -czvf $(RELEASE_NAME).tar.gz $(RELEASE_NAME)
 	@rm -rf $(RELEASE_DIR)/$(RELEASE_NAME)
 	@echo "Release package: $(RELEASE_DIR)/$(RELEASE_NAME).tar.gz"
@@ -63,6 +64,7 @@ container-release-amd64: container-build-amd64
 		cp target-amd64/release/$$bin $(RELEASE_DIR)/$(RELEASE_NAME)/; \
 	done
 	@cp README.md LICENSE $(RELEASE_DIR)/$(RELEASE_NAME)/
+	@cp -R docs $(RELEASE_DIR)/$(RELEASE_NAME)/
 	@cd $(RELEASE_DIR) && tar -czvf $(RELEASE_NAME).tar.gz $(RELEASE_NAME)
 	@rm -rf $(RELEASE_DIR)/$(RELEASE_NAME)
 	@echo "Release package: $(RELEASE_DIR)/$(RELEASE_NAME).tar.gz"
@@ -74,6 +76,7 @@ container-release-arm64: container-build-arm64
 		cp target-arm64/release/$$bin $(RELEASE_DIR)/$(RELEASE_NAME)/; \
 	done
 	@cp README.md LICENSE $(RELEASE_DIR)/$(RELEASE_NAME)/
+	@cp -R docs $(RELEASE_DIR)/$(RELEASE_NAME)/
 	@cd $(RELEASE_DIR) && tar -czvf $(RELEASE_NAME).tar.gz $(RELEASE_NAME)
 	@rm -rf $(RELEASE_DIR)/$(RELEASE_NAME)
 	@echo "Release package: $(RELEASE_DIR)/$(RELEASE_NAME).tar.gz"
