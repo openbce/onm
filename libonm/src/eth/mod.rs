@@ -767,11 +767,19 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
         let mut settings = EthtoolSettings::default();
 
         let mut rings = handle.ring().get(Some(name)).execute().await;
-        while let Some(msg) = rings.try_next().await.map_err(|e| {
-            EthError::Internal(format!(
-                "failed to query ethtool ring settings for {name}: {e}"
-            ))
-        })? {
+        loop {
+            let msg = match rings.try_next().await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::debug!(
+                        interface = name,
+                        %error,
+                        "ethtool ring settings are unavailable"
+                    );
+                    break;
+                }
+            };
             for attr in msg.payload.nlas {
                 if let EthtoolAttr::Ring(ring_attr) = attr {
                     match ring_attr {
@@ -786,11 +794,19 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
         }
 
         let mut coalesces = handle.coalesce().get(Some(name)).execute().await;
-        while let Some(msg) = coalesces.try_next().await.map_err(|e| {
-            EthError::Internal(format!(
-                "failed to query ethtool coalesce settings for {name}: {e}"
-            ))
-        })? {
+        loop {
+            let msg = match coalesces.try_next().await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::debug!(
+                        interface = name,
+                        %error,
+                        "ethtool coalesce settings are unavailable"
+                    );
+                    break;
+                }
+            };
             for attr in msg.payload.nlas {
                 if let EthtoolAttr::Coalesce(coalesce_attr) = attr {
                     match coalesce_attr {
@@ -803,9 +819,19 @@ pub async fn get_ethtool_settings(name: &str) -> Result<EthtoolSettings, EthErro
         }
 
         let mut features = handle.feature().get(Some(name)).execute().await;
-        while let Some(msg) = features.try_next().await.map_err(|e| {
-            EthError::Internal(format!("failed to query ethtool features for {name}: {e}"))
-        })? {
+        loop {
+            let msg = match features.try_next().await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::debug!(
+                        interface = name,
+                        %error,
+                        "ethtool features are unavailable"
+                    );
+                    break;
+                }
+            };
             for attr in msg.payload.nlas {
                 if let EthtoolAttr::Feature(EthtoolFeatureAttr::Active(bits)) = attr {
                     for bit in bits {
