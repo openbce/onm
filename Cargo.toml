@@ -6,6 +6,7 @@ members = [
     "smctl",
     "hcactl",
     "ethctl",
+    "kprobe",
 ]
 
 [workspace.dependencies]

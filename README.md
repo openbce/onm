@@ -78,6 +78,26 @@ kube-proxy-compatible conntrack recommendations. Endpoint TCP settings,
 firewall policy, MTU, queues, and VPN-specific offloads must be validated for
 the deployed routing topology.
 
+## kprobe
+
+`kprobe` checks pod-network connectivity between Kubernetes nodes. It creates a
+temporary `agnhost` DaemonSet, listens on TCP port 1199, and tests every directed
+pod pair through the Kubernetes exec API. During the run it displays only a
+progress bar; after completion it prints totals and up to 50 failed-path samples.
+
+```bash
+kprobe
+kprobe --namespace onm-system --concurrency 32 --timeout 3s
+kprobe --ip-family ipv6
+```
+
+The current kubeconfig context and the `onm-system` namespace are used by
+default. The namespace is created first if it does not exist and is retained
+after the run. The caller needs permission to get and create Namespaces; create,
+get, patch, and delete DaemonSets; list Pods; and create `pods/exec` requests.
+TCP/IPv4 is tested by default; IPv6 is opt-in. The temporary DaemonSet is
+removed on completion, failure, or Ctrl-C.
+
 ## onm-shell
 
 ```bash

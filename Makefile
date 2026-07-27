@@ -1,6 +1,6 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 RELEASE_DIR := release
-BINARIES := ethctl smctl hcactl xpuctl
+BINARIES := ethctl smctl hcactl xpuctl kprobe
 BUILD_IMAGE := onm-builder
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo docker)
 
