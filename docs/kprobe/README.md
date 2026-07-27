@@ -4,6 +4,14 @@
 temporary `agnhost` pod on every eligible Linux node and checks every directed
 source-to-destination path on TCP port 1199.
 
+## Build
+
+```bash
+cargo build --release -p kprobe
+```
+
+The binary is written to `target/release/kprobe`.
+
 ## Usage
 
 ```bash

@@ -1,20 +1,40 @@
 # hcactl
 
-hcactl dependent on `libverbs` and `libudev` to provide tools &amp; lib for the information of HCAs:
+`hcactl` lists host channel adapters (HCAs), PCI placement, firmware and board
+information, and InfiniBand or Ethernet port state.
 
-* hcactl: a command line to list HCA information
+## Requirements
 
-## Install
+`hcactl` runs on Linux and requires libibverbs, libudev, libpci, Clang, and
+pkg-config development files. On Ubuntu:
 
+```bash
+sudo apt install -y \
+  libclang-dev \
+  libibverbs-dev \
+  libudev-dev \
+  libpci-dev \
+  pkg-config
 ```
-$ sudo apt install -y libclang-dev libibverbs-dev libudev-dev libpci-dev pkg-config
-$ cargo install --git https://github.com/openbce/ib-rs hcactl
+
+## Build
+
+```bash
+cargo build --release -p hcactl
+```
+
+The binary is written to `target/release/hcactl`.
+
+## Usage
+
+```bash
+hcactl list
 ```
 
 ## Example
 
-```
-$ hcactl list
+```text
+hcactl list
 ----------------------------------------------
 ID             : 15B3:0009
 Model          : MT43244 BlueField-3 integrated ConnectX-7 network controller

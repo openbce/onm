@@ -1,117 +1,37 @@
 # Open Network Management
 
-## libonm
+Open Network Management (ONM) provides focused command-line tools for host,
+fabric, accelerator, and Kubernetes network operations.
 
-The lib for open network management.
+## Command-line tools
 
-## xpuctl
+| Command | Purpose | Start here | Guide |
+| --- | --- | --- | --- |
+| `ethctl` | Inspect Ethernet interfaces, routes, NAT, pressure, and tuning candidates | `ethctl list` | [ethctl guide](docs/ethctl/README.md) |
+| `hcactl` | List host channel adapters and their ports | `hcactl list` | [hcactl guide](docs/hcactl/README.md) |
+| `smctl` | Inspect and manage NVIDIA UFM subnet-manager partitions | `smctl list` | [smctl guide](docs/smctl/README.md) |
+| `xpuctl` | Discover and inspect XPU/BMC devices through Redfish | `xpuctl list` | [xpuctl guide](docs/xpuctl/README.md) |
+| `kprobe` | Check every directed Kubernetes node-to-node pod-network path | `kprobe` | [kprobe guide](docs/kprobe/README.md) |
 
-The command line to manage XPU.
-See the [xpuctl guide](docs/xpuctl/README.md) for configuration and examples.
+Run `<command> --help` for CLI syntax. Each linked guide contains the tool's
+requirements, configuration, command reference, examples, and operational
+notes where applicable.
 
-## hcactl
-
-The command line to manage HCA of host.
-See the [hcactl guide](docs/hcactl/README.md) for installation and examples.
-
-## smctl
-
-The command line to manage subnet manager.
-See the [smctl guide](docs/smctl/README.md) for configuration and examples.
-
-## ethctl
-
-The command line to manage Ethernet interfaces and network sysctl tuning.
-See the [ethctl guide](docs/ethctl/README.md) for complete command, profile, build,
-and operational documentation.
+## Build
 
 ```bash
-# List interfaces
-ethctl list
-
-# Show interface details and suggested tuning values
-ethctl info
-
-# Show link and ethtool settings
-ethctl link --name eth0
-
-# Show control-plane tuning for 10k-node cluster
-ethctl info --profile control-plane
-
-# Show routing and forwarding checks for a gateway
-ethctl info --profile gateway
-
-# Generate sysctl commands
-ethctl info --output cmd
-
-# Generate sysctl.conf format
-ethctl info --output conf
-
-# Generate tuning script for control-plane
-ethctl info --profile control-plane --output script > tune-network.sh
-
-# Show routes or NAT rules
-ethctl route
-ethctl nat
+cargo build --release --workspace
 ```
 
-The profiles automatically apply only kube-proxy-compatible conntrack capacity
-and timeout bounds, plus packet forwarding for the gateway profile. Settings
-whose correct value depends on RAM, bandwidth-delay product, application
-timeouts, CNI routing, NIC capabilities, or the full network path are shown as
-investigation candidates with a `(?)` suffix and are not changed automatically.
-This includes socket buffers, listen and device queues, neighbor thresholds,
-ARP policy, reverse-path filtering, MTU, ring size, interrupt coalescing, and
-offloads.
+The command binaries are written to `target/release/`. Some host-management
+tools require Linux system libraries; see the relevant guide before building.
 
-Generated `cmd`, `conf`, and `script` output includes actionable investigation
-candidates as commented-out, syntactically valid settings that must be
-explicitly uncommented after validation.
+## Library
 
-Use `ethctl stats` before changing candidates. It reports conntrack utilization
-and hash load, softnet pressure, TCP listen/queue/memory failures, neighbor-table
-occupancy and failures, and the detected kube-proxy dataplane/rule count. Use
-`ethctl stats --interface <name>` to include standard NIC missed/drop counters.
+`libonm` contains the shared Rust APIs used by the command-line tools.
 
-The `gateway` profile enables IPv4 and IPv6 forwarding and applies only
-kube-proxy-compatible conntrack recommendations. Endpoint TCP settings,
-firewall policy, MTU, queues, and VPN-specific offloads must be validated for
-the deployed routing topology.
+## Container shell
 
-## kprobe
-
-`kprobe` checks pod-network connectivity between Kubernetes nodes. It creates a
-temporary `agnhost` DaemonSet, listens on TCP port 1199, and tests every directed
-pod pair through the Kubernetes exec API. During the run it displays only a
-progress bar; after completion it prints totals and up to 50 failed-path samples.
-
-```bash
-kprobe
-kprobe --namespace onm-system --concurrency 32 --timeout 3s
-kprobe --ip-family ipv6
-```
-
-The current kubeconfig context and the `onm-system` namespace are used by
-default. The namespace is created first if it does not exist and is retained
-after the run. The caller needs permission to get and create Namespaces; create,
-get, patch, and delete DaemonSets; list Pods; and create `pods/exec` requests.
-TCP/IPv4 is tested by default; IPv6 is opt-in. The temporary DaemonSet is
-removed on completion, failure, or Ctrl-C. Fatal pod startup states such as
-`ImagePullBackOff` are reported directly instead of waiting for the readiness
-deadline. Probe pods have Kubernetes `BestEffort` QoS.
-
-## onm-shell
-
-```bash
-# Build
-docker build -t openbce/onm-shell .
-
-# Run as daemon (privileged + host network for device access)
-docker run -d --name onm-shell --privileged --network host openbce/onm-shell
-
-# Enter shell
-docker exec -it onm-shell bash
-
-# Stop and remove
-docker stop onm-shell && docker rm onm-shell
-```
+ONM also provides a privileged troubleshooting container with the compiled
+tools and common network utilities. See the
+[onm-shell guide](docs/onm-shell/README.md).

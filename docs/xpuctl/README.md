@@ -1,6 +1,14 @@
 # xpuctl
 
-A command line to manage xpu through redfish.
+A command line to manage XPU devices through Redfish.
+
+## Build
+
+```bash
+cargo build --release -p xpuctl
+```
+
+The binary is written to `target/release/xpuctl`.
 
 ## Configuration
 
@@ -27,7 +35,7 @@ address = "https://192.168.0.155"
 # tls_verify = false
 ```
 
-**Security Note**: The configuration file contains credentials in plain text. 
+**Security Note**: The configuration file contains credentials in plain text.
 Ensure the file has restricted permissions: `chmod 600 ~/.xpuctl`
 
 ## Commands
