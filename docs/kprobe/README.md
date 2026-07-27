@@ -41,10 +41,14 @@ The temporary DaemonSet:
 
 - runs `agnhost netexec --http-port=1199 --udp-port=-1`;
 - selects Linux nodes and tolerates all taints;
-- requests 5m CPU and 8 MiB memory per node;
+- has no resource requests or limits, giving it Kubernetes `BestEffort` QoS;
 - drops Linux capabilities, disallows privilege escalation, and uses the
   runtime-default seccomp profile;
 - is uniquely named for each invocation and deleted at the end.
+
+While waiting for readiness, fatal container states such as `ErrImagePull`,
+`ImagePullBackOff`, configuration errors, and crash loops are detected and
+reported with the pod and node instead of being reduced to a readiness timeout.
 
 Each source pod runs:
 

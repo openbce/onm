@@ -96,7 +96,9 @@ default. The namespace is created first if it does not exist and is retained
 after the run. The caller needs permission to get and create Namespaces; create,
 get, patch, and delete DaemonSets; list Pods; and create `pods/exec` requests.
 TCP/IPv4 is tested by default; IPv6 is opt-in. The temporary DaemonSet is
-removed on completion, failure, or Ctrl-C.
+removed on completion, failure, or Ctrl-C. Fatal pod startup states such as
+`ImagePullBackOff` are reported directly instead of waiting for the readiness
+deadline. Probe pods have Kubernetes `BestEffort` QoS.
 
 ## onm-shell
 

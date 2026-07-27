@@ -41,7 +41,7 @@ struct Args {
     namespace: String,
 
     /// Agnhost image used by the probe
-    #[arg(long, default_value = "registry.k8s.io/e2e-test-images/agnhost:2.66")]
+    #[arg(long, default_value = "registry.k8s.io/e2e-test-images/agnhost:2.61")]
     image: String,
 
     /// Maximum number of simultaneous pod exec requests
@@ -104,6 +104,8 @@ enum ProbeError {
     ReadyTimeout(Duration),
     #[error("the DaemonSet has no eligible Linux nodes")]
     NoEligibleNodes,
+    #[error("probe pod startup failed: {0}")]
+    PodStartup(String),
     #[error("probe pod {pod} has no {family} address")]
     MissingPodIp { pod: String, family: IpFamily },
     #[error("interrupted")]
@@ -213,6 +215,16 @@ impl Probe {
                 }
                 if desired == 0 && started.elapsed() >= Duration::from_secs(5) {
                     return Err(ProbeError::NoEligibleNodes);
+                }
+            }
+
+            if started.elapsed() >= Duration::from_secs(10) {
+                let pods = self
+                    .pods
+                    .list(&ListParams::default().labels(&self.selector))
+                    .await?;
+                if let Some(failure) = pods.items.iter().find_map(pod_startup_failure) {
+                    return Err(ProbeError::PodStartup(failure));
                 }
             }
 
@@ -329,6 +341,42 @@ impl Probe {
     }
 }
 
+fn pod_startup_failure(pod: &Pod) -> Option<String> {
+    const FAILURE_REASONS: &[&str] = &[
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "CrashLoopBackOff",
+        "ErrImagePull",
+        "ImagePullBackOff",
+        "InvalidImageName",
+        "RunContainerError",
+    ];
+
+    let status = pod.status.as_ref()?;
+    let waiting = status
+        .init_container_statuses
+        .iter()
+        .chain(status.container_statuses.iter())
+        .flatten()
+        .filter_map(|container| container.state.as_ref()?.waiting.as_ref())
+        .find(|waiting| {
+            waiting
+                .reason
+                .as_deref()
+                .is_some_and(|reason| FAILURE_REASONS.contains(&reason))
+        })?;
+    let reason = waiting.reason.as_deref().unwrap_or("unknown error");
+    let message = waiting.message.as_deref().unwrap_or("no details available");
+    Some(format!(
+        "{} on {}: {reason}: {message}",
+        pod.name_any(),
+        pod.spec
+            .as_ref()
+            .and_then(|spec| spec.node_name.as_deref())
+            .unwrap_or("<unscheduled>")
+    ))
+}
+
 fn select_pod_ip(
     status: &k8s_openapi::api::core::v1::PodStatus,
     family: IpFamily,
@@ -369,10 +417,6 @@ fn daemonset(name: &str, image: &str) -> DaemonSet {
                             "httpGet": { "path": "/", "port": PORT },
                             "periodSeconds": 1,
                             "timeoutSeconds": 1
-                        },
-                        "resources": {
-                            "requests": { "cpu": "5m", "memory": "8Mi" },
-                            "limits": { "memory": "32Mi" }
                         },
                         "securityContext": {
                             "allowPrivilegeEscalation": false,
@@ -627,6 +671,39 @@ mod tests {
     }
 
     #[test]
+    fn reports_fatal_pod_startup_state() {
+        let pod: Pod = serde_json::from_value(json!({
+            "metadata": { "name": "probe-a" },
+            "spec": {
+                "nodeName": "node-a",
+                "containers": [{ "name": "agnhost", "image": "missing:test" }]
+            },
+            "status": {
+                "containerStatuses": [{
+                    "name": "agnhost",
+                    "image": "missing:test",
+                    "imageID": "",
+                    "ready": false,
+                    "restartCount": 0,
+                    "started": false,
+                    "state": {
+                        "waiting": {
+                            "reason": "ImagePullBackOff",
+                            "message": "image not found"
+                        }
+                    }
+                }]
+            }
+        }))
+        .expect("pod");
+
+        assert_eq!(
+            pod_startup_failure(&pod).as_deref(),
+            Some("probe-a on node-a: ImagePullBackOff: image not found")
+        );
+    }
+
+    #[test]
     fn daemonset_is_scoped_and_self_contained() {
         let daemonset = daemonset("onm-kprobe-test", "example/agnhost:test");
         assert_eq!(
@@ -642,6 +719,10 @@ mod tests {
         assert_eq!(
             pod_spec.containers[0].args.as_ref().unwrap()[1],
             "--http-port=1199"
+        );
+        assert!(
+            pod_spec.containers[0].resources.is_none(),
+            "probe pods should have BestEffort QoS"
         );
         assert!(!pod_spec.automount_service_account_token.unwrap());
     }
