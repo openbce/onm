@@ -36,6 +36,7 @@ RUN install -m 0755 \
     /workspace/target/release/xpuctl \
     /workspace/target/release/ethctl \
     /workspace/target/release/kprobe \
+    /workspace/target/release/tsctl \
     /usr/local/bin/
 
 ENTRYPOINT ["sh", "-c", "exec tail -f /dev/null"]

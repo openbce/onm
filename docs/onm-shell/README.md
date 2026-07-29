@@ -34,8 +34,8 @@ Enter the shell:
 docker exec -it onm-shell bash
 ```
 
-The image includes `ethctl`, `hcactl`, `smctl`, `xpuctl`, `kprobe`, `kubectl`,
-`tcpdump`, `iproute2`, `nftables`, `pciutils`, and related tools.
+The image includes `ethctl`, `hcactl`, `smctl`, `xpuctl`, `kprobe`, `tsctl`,
+`kubectl`, `tcpdump`, `iproute2`, `nftables`, `pciutils`, and related tools.
 
 ## Stop and remove
 

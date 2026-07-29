@@ -12,6 +12,7 @@ fabric, accelerator, and Kubernetes network operations.
 | `smctl` | Inspect and manage NVIDIA UFM subnet-manager partitions | `smctl list` | [smctl guide](docs/smctl/README.md) |
 | `xpuctl` | Discover and inspect XPU/BMC devices through Redfish | `xpuctl list` | [xpuctl guide](docs/xpuctl/README.md) |
 | `kprobe` | Check every directed Kubernetes node-to-node pod-network path | `kprobe` | [kprobe guide](docs/kprobe/README.md) |
+| `tsctl` | Inspect Tailscale tailnets and devices through the REST API | `tsctl list -n -` | [tsctl guide](docs/tsctl/README.md) |
 
 Run `<command> --help` for CLI syntax. Each linked guide contains the tool's
 requirements, configuration, command reference, examples, and operational
