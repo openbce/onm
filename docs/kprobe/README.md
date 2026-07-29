@@ -22,6 +22,7 @@ Useful options:
 
 ```text
 -n, --namespace <NAMESPACE>       Namespace (default: onm-system)
+-l, --selector <SELECTOR>         Extra node labels: key=value[,key=value...]
 -c, --concurrency <CONCURRENCY>   Simultaneous pod exec requests (default: 16)
 -t, --timeout <TIMEOUT>           Per-connection timeout (default: 5s)
     --ip-family <IP-FAMILY>       Pod address family: ipv4 or ipv6 (default: ipv4)
@@ -29,11 +30,24 @@ Useful options:
     --image <IMAGE>               Override the agnhost image
 ```
 
-The tool uses the active kubeconfig context (or in-cluster configuration). It
-does not invoke `kubectl`. Cluster operations and pod exec sessions are made
-directly with `kube-rs`. Before creating the DaemonSet, `kprobe` ensures that
-the selected namespace exists and creates it when missing. Namespace creation
-is idempotent, and the namespace is never deleted during cleanup.
+Use `--selector` to limit which nodes receive probe pods. Labels are merged into
+the DaemonSet `nodeSelector` alongside the built-in `kubernetes.io/os=linux`
+requirement. For example:
+
+```bash
+kprobe --selector kubernetes.io/hostname=node-a
+kprobe -l topology.kubernetes.io/zone=zone-1,node-role.kubernetes.io/worker=
+```
+
+The tool uses only the active context from the local kubeconfig. It does not
+invoke `kubectl`, select cloud-provider profiles, or contain provider-specific
+authentication logic. Authentication is delegated to whatever mechanism the
+current context defines. Cluster operations and pod exec sessions are made
+directly with `kube-rs`.
+
+Before creating the DaemonSet, `kprobe` ensures that the selected namespace
+exists and creates it when missing. Namespace creation is idempotent, and the
+namespace is never deleted during cleanup.
 
 TCP/IPv4 is the default. On dual-stack clusters, `kprobe` explicitly selects
 each pod's IPv4 address instead of relying on the primary `podIP`. Use
@@ -48,7 +62,7 @@ results are not retained, so memory use does not grow with the number of paths.
 The temporary DaemonSet:
 
 - runs `agnhost netexec --http-port=1199 --udp-port=-1`;
-- selects Linux nodes and tolerates all taints;
+- selects Linux nodes (plus any `--selector` labels) and tolerates all taints;
 - has no resource requests or limits, giving it Kubernetes `BestEffort` QoS;
 - drops Linux capabilities, disallows privilege escalation, and uses the
   runtime-default seccomp profile;

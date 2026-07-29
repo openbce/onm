@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt,
     net::IpAddr,
     process::ExitCode,
@@ -18,7 +19,8 @@ use k8s_openapi::{
 };
 use kube::{
     api::{AttachParams, DeleteParams, ListParams, Patch, PatchParams, PostParams},
-    Api, Client, ResourceExt,
+    config::KubeConfigOptions,
+    Api, Client, Config, ResourceExt,
 };
 use serde_json::json;
 use thiserror::Error;
@@ -59,6 +61,10 @@ struct Args {
     /// Maximum time to wait for all DaemonSet pods to become ready
     #[arg(long, default_value = "2m", value_parser = parse_duration)]
     ready_timeout: Duration,
+
+    /// Additional node selector labels (comma-separated key=value pairs)
+    #[arg(short = 'l', long = "selector", value_name = "SELECTOR", value_parser = parse_selector, default_value = "")]
+    selector: BTreeMap<String, String>,
 }
 
 fn parse_duration(value: &str) -> Result<Duration, String> {
@@ -70,6 +76,32 @@ fn parse_concurrency(value: &str) -> Result<usize, String> {
         Ok(value) if value > 0 => Ok(value),
         _ => Err("concurrency must be greater than zero".into()),
     }
+}
+
+fn parse_selector(value: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut selector = BTreeMap::new();
+    if value.trim().is_empty() {
+        return Ok(selector);
+    }
+
+    for part in value.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (key, label_value) = part.split_once('=').ok_or_else(|| {
+            format!("invalid selector {part:?}: expected key=value[,key=value...]")
+        })?;
+        let key = key.trim();
+        let label_value = label_value.trim();
+        if key.is_empty() {
+            return Err(format!(
+                "invalid selector {part:?}: label key must not be empty"
+            ));
+        }
+        selector.insert(key.to_string(), label_value.to_string());
+    }
+    Ok(selector)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -181,8 +213,12 @@ impl Probe {
         }
     }
 
-    async fn deploy(&self, image: &str) -> Result<(), ProbeError> {
-        let daemonset = daemonset(&self.name, image);
+    async fn deploy(
+        &self,
+        image: &str,
+        selector: &BTreeMap<String, String>,
+    ) -> Result<(), ProbeError> {
+        let daemonset = daemonset(&self.name, image, selector);
         self.daemonsets
             .patch(
                 &self.name,
@@ -391,7 +427,13 @@ fn select_pod_ip(
         .cloned()
 }
 
-fn daemonset(name: &str, image: &str) -> DaemonSet {
+fn node_selector(extra: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut selector = BTreeMap::from([("kubernetes.io/os".into(), "linux".into())]);
+    selector.extend(extra.iter().map(|(key, value)| (key.clone(), value.clone())));
+    selector
+}
+
+fn daemonset(name: &str, image: &str, selector: &BTreeMap<String, String>) -> DaemonSet {
     serde_json::from_value(json!({
         "apiVersion": "apps/v1",
         "kind": "DaemonSet",
@@ -405,7 +447,7 @@ fn daemonset(name: &str, image: &str) -> DaemonSet {
                 "metadata": { "labels": { (APP_LABEL): name } },
                 "spec": {
                     "automountServiceAccountToken": false,
-                    "nodeSelector": { "kubernetes.io/os": "linux" },
+                    "nodeSelector": node_selector(selector),
                     "terminationGracePeriodSeconds": 0,
                     "tolerations": [{ "operator": "Exists" }],
                     "containers": [{
@@ -556,16 +598,23 @@ fn print_summary(endpoints: &[Endpoint], summary: &TestSummary, elapsed: Duratio
 async fn main() -> ExitCode {
     let args = Args::parse();
     let started = Instant::now();
-    let progress = progress_bar();
 
-    let client = match Client::try_default().await {
-        Ok(client) => client,
+    let config = match Config::from_kubeconfig(&KubeConfigOptions::default()).await {
+        Ok(config) => config,
         Err(error) => {
-            progress.finish_and_clear();
-            eprintln!("kprobe: could not load Kubernetes configuration: {error}");
+            eprintln!("kprobe: could not load the current kubeconfig context: {error}");
             return ExitCode::FAILURE;
         }
     };
+    let client = match Client::try_from(config) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("kprobe: could not create Kubernetes client: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let progress = progress_bar();
     progress.set_message(format!("ensuring namespace {}", args.namespace));
     if let Err(error) = ensure_namespace(client.clone(), &args.namespace).await {
         progress.finish_and_clear();
@@ -577,7 +626,7 @@ async fn main() -> ExitCode {
     }
 
     let probe = Probe::new(client, &args.namespace);
-    if let Err(error) = probe.deploy(&args.image).await {
+    if let Err(error) = probe.deploy(&args.image, &args.selector).await {
         progress.finish_and_clear();
         eprintln!("kprobe: {error}");
         return ExitCode::FAILURE;
@@ -632,6 +681,33 @@ mod tests {
     fn uses_onm_system_by_default() {
         let args = Args::try_parse_from(["kprobe"]).expect("default arguments");
         assert_eq!(args.namespace, "onm-system");
+        assert!(args.selector.is_empty());
+    }
+
+    #[test]
+    fn parses_node_selector_labels() {
+        let args = Args::try_parse_from([
+            "kprobe",
+            "--selector",
+            "kubernetes.io/hostname=node-a,topology.kubernetes.io/zone=zone-1",
+        ])
+        .expect("selector arguments");
+        assert_eq!(
+            args.selector.get("kubernetes.io/hostname").map(String::as_str),
+            Some("node-a")
+        );
+        assert_eq!(
+            args.selector
+                .get("topology.kubernetes.io/zone")
+                .map(String::as_str),
+            Some("zone-1")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_node_selector() {
+        let error = parse_selector("hostname").expect_err("missing equals");
+        assert!(error.contains("expected key=value"));
     }
 
     #[test]
@@ -705,16 +781,22 @@ mod tests {
 
     #[test]
     fn daemonset_is_scoped_and_self_contained() {
-        let daemonset = daemonset("onm-kprobe-test", "example/agnhost:test");
+        let selector = BTreeMap::from([("kubernetes.io/hostname".into(), "node-a".into())]);
+        let daemonset = daemonset("onm-kprobe-test", "example/agnhost:test", &selector);
         assert_eq!(
             daemonset.metadata.labels.as_ref().unwrap().get(APP_LABEL),
             Some(&"onm-kprobe-test".to_string())
         );
         let spec = daemonset.spec.expect("spec");
         let pod_spec = spec.template.spec.expect("pod spec");
+        let node_selector = pod_spec.node_selector.unwrap();
         assert_eq!(
-            pod_spec.node_selector.unwrap().get("kubernetes.io/os"),
+            node_selector.get("kubernetes.io/os"),
             Some(&"linux".to_string())
+        );
+        assert_eq!(
+            node_selector.get("kubernetes.io/hostname"),
+            Some(&"node-a".to_string())
         );
         assert_eq!(
             pod_spec.containers[0].args.as_ref().unwrap()[1],
