@@ -13,7 +13,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use k8s_openapi::{
     api::{
         apps::v1::DaemonSet,
-        core::v1::{Namespace, Pod},
+        core::v1::{
+            Affinity, Namespace, Node, NodeAffinity, NodeSelector, NodeSelectorRequirement,
+            NodeSelectorTerm, Pod,
+        },
     },
     apimachinery::pkg::apis::meta::v1::ObjectMeta,
 };
@@ -167,6 +170,7 @@ struct TestSummary {
 
 struct Probe {
     daemonsets: Api<DaemonSet>,
+    nodes: Api<Node>,
     pods: Api<Pod>,
     name: String,
     selector: String,
@@ -207,6 +211,7 @@ impl Probe {
         let name = format!("onm-kprobe-{suffix}-{}", std::process::id());
         Self {
             daemonsets: Api::namespaced(client.clone(), namespace),
+            nodes: Api::all(client.clone()),
             pods: Api::namespaced(client, namespace),
             selector: format!("{APP_LABEL}={name}"),
             name,
@@ -218,7 +223,9 @@ impl Probe {
         image: &str,
         selector: &BTreeMap<String, String>,
     ) -> Result<(), ProbeError> {
-        let daemonset = daemonset(&self.name, image, selector);
+        let nodes = self.nodes.list(&ListParams::default()).await?;
+        let unschedulable_nodes = unschedulable_node_names(&nodes.items);
+        let daemonset = daemonset(&self.name, image, selector, unschedulable_nodes);
         self.daemonsets
             .patch(
                 &self.name,
@@ -429,11 +436,56 @@ fn select_pod_ip(
 
 fn node_selector(extra: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut selector = BTreeMap::from([("kubernetes.io/os".into(), "linux".into())]);
-    selector.extend(extra.iter().map(|(key, value)| (key.clone(), value.clone())));
+    selector.extend(
+        extra
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     selector
 }
 
-fn daemonset(name: &str, image: &str, selector: &BTreeMap<String, String>) -> DaemonSet {
+fn unschedulable_node_names(nodes: &[Node]) -> Vec<String> {
+    nodes
+        .iter()
+        .filter(|node| {
+            node.spec
+                .as_ref()
+                .and_then(|spec| spec.unschedulable)
+                .unwrap_or(false)
+        })
+        .map(ResourceExt::name_any)
+        .collect()
+}
+
+fn schedulable_node_affinity(unschedulable_nodes: Vec<String>) -> Option<Affinity> {
+    if unschedulable_nodes.is_empty() {
+        return None;
+    }
+
+    Some(Affinity {
+        node_affinity: Some(NodeAffinity {
+            required_during_scheduling_ignored_during_execution: Some(NodeSelector {
+                node_selector_terms: vec![NodeSelectorTerm {
+                    match_fields: Some(vec![NodeSelectorRequirement {
+                        key: "metadata.name".into(),
+                        operator: "NotIn".into(),
+                        values: Some(unschedulable_nodes),
+                    }]),
+                    ..NodeSelectorTerm::default()
+                }],
+            }),
+            ..NodeAffinity::default()
+        }),
+        ..Affinity::default()
+    })
+}
+
+fn daemonset(
+    name: &str,
+    image: &str,
+    selector: &BTreeMap<String, String>,
+    unschedulable_nodes: Vec<String>,
+) -> DaemonSet {
     serde_json::from_value(json!({
         "apiVersion": "apps/v1",
         "kind": "DaemonSet",
@@ -446,6 +498,7 @@ fn daemonset(name: &str, image: &str, selector: &BTreeMap<String, String>) -> Da
             "template": {
                 "metadata": { "labels": { (APP_LABEL): name } },
                 "spec": {
+                    "affinity": schedulable_node_affinity(unschedulable_nodes),
                     "automountServiceAccountToken": false,
                     "nodeSelector": node_selector(selector),
                     "terminationGracePeriodSeconds": 0,
@@ -693,7 +746,9 @@ mod tests {
         ])
         .expect("selector arguments");
         assert_eq!(
-            args.selector.get("kubernetes.io/hostname").map(String::as_str),
+            args.selector
+                .get("kubernetes.io/hostname")
+                .map(String::as_str),
             Some("node-a")
         );
         assert_eq!(
@@ -780,9 +835,33 @@ mod tests {
     }
 
     #[test]
+    fn identifies_unschedulable_nodes() {
+        let schedulable: Node = serde_json::from_value(json!({
+            "metadata": { "name": "node-a" },
+            "spec": {}
+        }))
+        .expect("schedulable node");
+        let unschedulable: Node = serde_json::from_value(json!({
+            "metadata": { "name": "node-b" },
+            "spec": { "unschedulable": true }
+        }))
+        .expect("unschedulable node");
+
+        assert_eq!(
+            unschedulable_node_names(&[schedulable, unschedulable]),
+            vec!["node-b"]
+        );
+    }
+
+    #[test]
     fn daemonset_is_scoped_and_self_contained() {
         let selector = BTreeMap::from([("kubernetes.io/hostname".into(), "node-a".into())]);
-        let daemonset = daemonset("onm-kprobe-test", "example/agnhost:test", &selector);
+        let daemonset = daemonset(
+            "onm-kprobe-test",
+            "example/agnhost:test",
+            &selector,
+            vec!["node-b".into()],
+        );
         assert_eq!(
             daemonset.metadata.labels.as_ref().unwrap().get(APP_LABEL),
             Some(&"onm-kprobe-test".to_string())
@@ -797,6 +876,26 @@ mod tests {
         assert_eq!(
             node_selector.get("kubernetes.io/hostname"),
             Some(&"node-a".to_string())
+        );
+        let affinity = pod_spec
+            .affinity
+            .as_ref()
+            .and_then(|affinity| affinity.node_affinity.as_ref())
+            .and_then(|affinity| {
+                affinity
+                    .required_during_scheduling_ignored_during_execution
+                    .as_ref()
+            })
+            .expect("required node affinity");
+        let match_field = &affinity.node_selector_terms[0]
+            .match_fields
+            .as_ref()
+            .expect("match fields")[0];
+        assert_eq!(match_field.key, "metadata.name");
+        assert_eq!(match_field.operator, "NotIn");
+        assert_eq!(
+            match_field.values.as_deref(),
+            Some(&["node-b".to_string()][..])
         );
         assert_eq!(
             pod_spec.containers[0].args.as_ref().unwrap()[1],

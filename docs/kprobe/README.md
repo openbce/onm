@@ -1,8 +1,8 @@
 # kprobe
 
 `kprobe` validates the pod network between Kubernetes nodes. It creates one
-temporary `agnhost` pod on every eligible Linux node and checks every directed
-source-to-destination path on TCP port 1199.
+temporary `agnhost` pod on every eligible, schedulable Linux node and checks
+every directed source-to-destination path on TCP port 1199.
 
 ## Build
 
@@ -62,7 +62,8 @@ results are not retained, so memory use does not grow with the number of paths.
 The temporary DaemonSet:
 
 - runs `agnhost netexec --http-port=1199 --udp-port=-1`;
-- selects Linux nodes (plus any `--selector` labels) and tolerates all taints;
+- selects schedulable Linux nodes (plus any `--selector` labels) and tolerates
+  all taints;
 - has no resource requests or limits, giving it Kubernetes `BestEffort` QoS;
 - drops Linux capabilities, disallows privilege escalation, and uses the
   runtime-default seccomp profile;
@@ -86,6 +87,7 @@ This is the image's built-in TCP connectivity client and does not require
 The Kubernetes identity must be able to:
 
 - get and create cluster-scoped `v1` Namespaces;
+- list cluster-scoped `v1` Nodes;
 - create, get, patch, and delete `apps/v1` DaemonSets in the selected namespace;
 - list Pods in the selected namespace;
 - create requests against the `pods/exec` subresource.
