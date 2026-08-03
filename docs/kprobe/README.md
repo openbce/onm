@@ -1,8 +1,10 @@
 # kprobe
 
 `kprobe` validates the pod network between Kubernetes nodes. It creates one
-temporary `agnhost` pod on every eligible, schedulable Linux node and checks
-every directed source-to-destination path on TCP port 1199.
+temporary probe pod on every eligible Linux node and checks every directed
+source-to-destination path. Each path first verifies TCP connectivity with
+`agnhost`, then measures bandwidth with `iperf3`. Cordoned / unschedulable
+nodes are skipped.
 
 ## Build
 
@@ -21,13 +23,15 @@ kprobe [OPTIONS]
 Useful options:
 
 ```text
--n, --namespace <NAMESPACE>       Namespace (default: onm-system)
--l, --selector <SELECTOR>         Extra node labels: key=value[,key=value...]
--c, --concurrency <CONCURRENCY>   Simultaneous pod exec requests (default: 16)
--t, --timeout <TIMEOUT>           Per-connection timeout (default: 5s)
-    --ip-family <IP-FAMILY>       Pod address family: ipv4 or ipv6 (default: ipv4)
-    --ready-timeout <TIMEOUT>     DaemonSet readiness timeout (default: 2m)
-    --image <IMAGE>               Override the agnhost image
+-n, --namespace <NAMESPACE>         Namespace (default: onm-system)
+-l, --selector <SELECTOR>           Extra node labels: key=value[,key=value...]
+-c, --concurrency <CONCURRENCY>     Simultaneous pod exec requests (default: 16)
+-t, --timeout <TIMEOUT>             Per-connect timeout (default: 5s)
+    --bandwidth-time <DURATION>     iperf3 test duration per path (default: 3s, min 1s)
+    --bandwidth-image <IMAGE>       iperf3 image (default: networkstatic/iperf3:multiarch)
+    --ip-family <IP-FAMILY>         Pod address family: ipv4 or ipv6 (default: ipv4)
+    --ready-timeout <TIMEOUT>       DaemonSet readiness timeout (default: 2m)
+    --image <IMAGE>                 Agnhost image for connectivity checks
 ```
 
 Use `--selector` to limit which nodes receive probe pods. Labels are merged into
@@ -54,16 +58,22 @@ each pod's IPv4 address instead of relying on the primary `podIP`. Use
 `--ip-family ipv6` to run the equivalent TCP/IPv6 check. The run fails during
 setup if a ready probe pod does not have an address in the selected family.
 
-While running, `kprobe` emits one progress bar rather than one line per path.
-The final report contains totals and up to 50 representative failed paths. A
-run with any failed path exits non-zero. Pair generation is lazy and successful
-results are not retained, so memory use does not grow with the number of paths.
+While running, `kprobe` emits one progress bar. It first tests connectivity for
+all paths, then measures bandwidth only for paths that connected successfully.
+The final report splits connect vs bandwidth results, reports aggregate
+throughput, the 3 slowest paths, and up to 50 representative failed paths. A
+run with any failed path exits non-zero. Pair generation is lazy and only the
+slowest successful paths are retained, so memory use does not grow with the
+number of paths.
 
-The temporary DaemonSet:
+The temporary DaemonSet runs two containers in each probe pod:
 
-- runs `agnhost netexec --http-port=1199 --udp-port=-1`;
-- selects schedulable Linux nodes (plus any `--selector` labels) and tolerates
-  all taints;
+- `connect`: `agnhost netexec --http-port=1199 --udp-port=-1` for TCP connectivity;
+- `bandwidth`: `iperf3 -s -p 5201` for throughput measurement (writable `/tmp`
+  emptyDir for iperf temp files);
+- selects Linux nodes (plus any `--selector` labels) and tolerates all taints;
+- skips cordoned/unschedulable nodes during readiness (their probe pods stay
+  Pending because the default scheduler will not bind them);
 - has no resource requests or limits, giving it Kubernetes `BestEffort` QoS;
 - drops Linux capabilities, disallows privilege escalation, and uses the
   runtime-default seccomp profile;
@@ -72,22 +82,32 @@ The temporary DaemonSet:
 While waiting for readiness, fatal container states such as `ErrImagePull`,
 `ImagePullBackOff`, configuration errors, and crash loops are detected and
 reported with the pod and node instead of being reduced to a readiness timeout.
+Pods that remain Pending only because their target node is unschedulable are
+ignored so the probe can continue on the remaining nodes.
 
-Each source pod runs:
+Each source pod first checks connectivity:
 
 ```text
 /agnhost connect --timeout <TIMEOUT> <DESTINATION_POD_IP>:1199
 ```
 
-This is the image's built-in TCP connectivity client and does not require
-`curl`, `nc`, a shell, or package installation.
+On success it measures bandwidth:
+
+```text
+iperf3 -c <DESTINATION_POD_IP> -p 5201 -t <BANDWIDTH_TIME> -J
+```
+
+Bandwidth is taken from iperf3 JSON `end.sum_received.bits_per_second`.
+Because each iperf3 server handles only one client at a time, bandwidth tests
+are serialized per destination after the connectivity phase completes. Brief
+retries cover residual "server is busy" races. Connectivity failures preserve
+agnhost error classes such as `TIMEOUT` and `REFUSED`.
 
 ## RBAC
 
 The Kubernetes identity must be able to:
 
 - get and create cluster-scoped `v1` Namespaces;
-- list cluster-scoped `v1` Nodes;
 - create, get, patch, and delete `apps/v1` DaemonSets in the selected namespace;
 - list Pods in the selected namespace;
 - create requests against the `pods/exec` subresource.
