@@ -2879,6 +2879,7 @@ name = "tsctl"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "comfy-table",
  "reqwest",
  "serde",
  "serde_json",

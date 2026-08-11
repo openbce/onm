@@ -13,15 +13,34 @@ The binary is written to `target/release/tsctl`.
 
 ## Authentication
 
-Create a Tailscale API access token and expose it through the environment:
+Provide either an API access token or an OAuth client.
+
+### API access token
 
 ```bash
 export TS_API_KEY='tskey-api-...'
 ```
 
-Keep the token out of configuration files and source control. For scoped
-credentials, read-only device operations require the `devices:core:read`
-scope.
+### OAuth client
+
+Create the OAuth client in the Tailscale admin console under
+[Trust credentials](https://login.tailscale.com/admin/settings/trust-credentials)
+and grant **Devices → Read** (scope `devices:core:read`, or the legacy
+`devices` / `devices:read` scopes). Without a devices scope, `list` and
+`view` return HTTP 403.
+
+```bash
+export TS_CLIENT_ID='k...'
+export TS_CLIENT_SECRET='tskey-client-...'
+```
+
+`tsctl` exchanges the client credentials for a short-lived access token before
+calling the API. By default it requests no extra `scope` parameter, so the
+token inherits every scope granted to the OAuth client (same as Tailscale's
+documented curl example). To narrow the token, set `TS_OAUTH_SCOPE` or
+`--oauth-scope` (for example `devices:core:read`).
+
+Keep credentials out of configuration files and source control.
 
 The API URL defaults to `https://api.tailscale.com/api/v2/`. It can be
 overridden with `TS_API_URL` or `--api-url`.
@@ -46,11 +65,15 @@ View a tailnet summary and its devices:
 tsctl view -n example.com
 ```
 
-View one device using its device ID or node ID:
+View one device using its device ID, node ID, MagicDNS name, or hostname:
 
 ```bash
 tsctl view -d n1234567890CNTRL
+tsctl view -d 150-136-69-0.taila6f3f.ts.net
 ```
+
+`-n/--tailnet` is the tailnet organization ID (or `-`), not a device name.
+`-d/--device` selects a single device.
 
 Return the original REST response as JSON or YAML:
 
