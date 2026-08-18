@@ -1,12 +1,13 @@
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use std::time::Duration;
 use thiserror::Error;
 use url::Url;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const DEFAULT_TAG_OWNER: &str = "autogroup:admin";
 
 #[derive(Debug, Error)]
 pub enum ApiError {
@@ -42,6 +43,12 @@ pub enum ApiError {
     AmbiguousDevice { query: String, count: usize },
     #[error("invalid JSON returned by Tailscale: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("ACL policy is not a JSON object")]
+    InvalidAcl,
+    #[error("ACL tagOwners is not a JSON object")]
+    InvalidTagOwners,
+    #[error("tag must not be empty")]
+    EmptyTag,
 }
 
 #[derive(Clone)]
@@ -133,6 +140,13 @@ pub struct Key {
 struct KeysResponse {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     keys: Vec<Key>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AclTagUpdate {
+    pub added: Vec<String>,
+    pub existing: Vec<String>,
+    pub owners: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -370,6 +384,66 @@ impl TailscaleClient {
         Ok((key, value))
     }
 
+    /// GET /tailnet/{tailnet}/acl as parsed JSON, plus the ETag for If-Match.
+    pub async fn get_acl(&self, tailnet: &str) -> Result<(Value, Option<String>), ApiError> {
+        let url = self.url(&["tailnet", tailnet, "acl"])?;
+        let url_text = url.to_string();
+        let request = self
+            .client
+            .get(url)
+            .bearer_auth(&self.api_key)
+            .header(reqwest::header::ACCEPT, "application/json");
+        let (status, body, etag) = self.exchange(request, url_text).await?;
+        if !status.is_success() {
+            return Err(self.error_from_body(status, &body));
+        }
+        Ok((serde_json::from_str(&body)?, etag))
+    }
+
+    /// POST /tailnet/{tailnet}/acl, replacing the policy. Uses If-Match when ETag is known.
+    pub async fn set_acl(
+        &self,
+        tailnet: &str,
+        policy: &Value,
+        etag: Option<&str>,
+    ) -> Result<Value, ApiError> {
+        let url = self.url(&["tailnet", tailnet, "acl"])?;
+        let url_text = url.to_string();
+        let mut request = self
+            .client
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(serde_json::to_vec(policy)?);
+        if let Some(etag) = etag.map(str::trim).filter(|value| !value.is_empty()) {
+            request = request.header(reqwest::header::IF_MATCH, etag);
+        }
+        let (status, body, _) = self.exchange(request, url_text).await?;
+        if !status.is_success() {
+            return Err(self.error_from_body(status, &body));
+        }
+        if body.trim().is_empty() {
+            return Ok(policy.clone());
+        }
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    pub fn oauth_client_id(&self) -> Option<&str> {
+        self.oauth_client_id.as_deref()
+    }
+
+    /// Read the ACL and add missing tags under tagOwners without writing.
+    pub async fn plan_acl_tag_owners(
+        &self,
+        tailnet: &str,
+        tags: &[String],
+    ) -> Result<(Value, Option<String>, AclTagUpdate), ApiError> {
+        let (mut policy, etag) = self.get_acl(tailnet).await?;
+        let update = ensure_tag_owners(&mut policy, tags, &[DEFAULT_TAG_OWNER.to_owned()])?;
+        Ok((policy, etag, update))
+    }
+
     pub async fn get_device(&self, device_id: &str) -> Result<(Device, Value), ApiError> {
         let url = self.url(&["device", device_id])?;
         let value: Value = self.get(url).await?;
@@ -442,49 +516,61 @@ impl TailscaleClient {
 
     async fn get<T: DeserializeOwned>(&self, url: Url) -> Result<T, ApiError> {
         let url_text = url.to_string();
-        let response = self
-            .client
-            .get(url)
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .map_err(|source| {
-                if source.is_timeout() {
-                    ApiError::Timeout {
-                        url: url_text.clone(),
-                    }
-                } else {
-                    ApiError::Request {
-                        url: url_text.clone(),
-                        source,
-                    }
-                }
-            })?;
+        let request = self.client.get(url).bearer_auth(&self.api_key);
+        let (status, body, _) = self.exchange(request, url_text).await?;
+        if !status.is_success() {
+            return Err(self.error_from_body(status, &body));
+        }
+        Ok(serde_json::from_str(&body)?)
+    }
 
+    async fn exchange(
+        &self,
+        request: reqwest::RequestBuilder,
+        url_text: String,
+    ) -> Result<(StatusCode, String, Option<String>), ApiError> {
+        let response = request.send().await.map_err(|source| {
+            if source.is_timeout() {
+                ApiError::Timeout {
+                    url: url_text.clone(),
+                }
+            } else {
+                ApiError::Request {
+                    url: url_text.clone(),
+                    source,
+                }
+            }
+        })?;
+
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
         let status = response.status();
         let body = response.text().await.map_err(|source| ApiError::Request {
             url: url_text,
             source,
         })?;
+        Ok((status, body, etag))
+    }
 
-        if !status.is_success() {
-            let message = serde_json::from_str::<Value>(&body)
-                .ok()
-                .and_then(|value| value.get("message")?.as_str().map(str::to_owned))
-                .unwrap_or_else(|| body.trim().to_owned());
-            if status == StatusCode::FORBIDDEN {
-                if let Some(token_scope) = self.token_scope.as_deref() {
-                    return Err(ApiError::PermissionDenied {
-                        status,
-                        message,
-                        token_scope: token_scope.to_owned(),
-                    });
-                }
+    fn error_from_body(&self, status: StatusCode, body: &str) -> ApiError {
+        let message = serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|value| value.get("message")?.as_str().map(str::to_owned))
+            .unwrap_or_else(|| body.trim().to_owned());
+        if status == StatusCode::FORBIDDEN {
+            if let Some(token_scope) = self.token_scope.as_deref() {
+                return ApiError::PermissionDenied {
+                    status,
+                    message,
+                    token_scope: token_scope.to_owned(),
+                };
             }
-            return Err(ApiError::Http { status, message });
         }
-
-        Ok(serde_json::from_str(&body)?)
+        ApiError::Http { status, message }
     }
 }
 
@@ -505,6 +591,60 @@ fn is_oauth_client(key: &Key) -> bool {
             && !key.key_type.eq_ignore_ascii_case("api")
             && !key.key_type.eq_ignore_ascii_case("auth")
             && !key.key_type.eq_ignore_ascii_case("federated"))
+}
+
+fn normalize_acl_tag(tag: &str) -> String {
+    let tag = tag.trim();
+    if tag.starts_with("tag:") {
+        tag.to_owned()
+    } else {
+        format!("tag:{tag}")
+    }
+}
+
+fn tag_owners_map(policy: &mut Value) -> Result<&mut Map<String, Value>, ApiError> {
+    let object = policy.as_object_mut().ok_or(ApiError::InvalidAcl)?;
+    match object.get("tagOwners") {
+        None | Some(Value::Null) => {
+            object.insert("tagOwners".to_owned(), json!({}));
+        }
+        Some(Value::Object(_)) => {}
+        Some(_) => return Err(ApiError::InvalidTagOwners),
+    }
+    object
+        .get_mut("tagOwners")
+        .and_then(Value::as_object_mut)
+        .ok_or(ApiError::InvalidTagOwners)
+}
+
+fn ensure_tag_owners(
+    policy: &mut Value,
+    tags: &[String],
+    owners: &[String],
+) -> Result<AclTagUpdate, ApiError> {
+    let tag_owners = tag_owners_map(policy)?;
+    let owner_values = Value::Array(owners.iter().cloned().map(Value::String).collect());
+    let mut added = Vec::new();
+    let mut existing = Vec::new();
+
+    for tag in tags {
+        let tag = normalize_acl_tag(tag);
+        if tag == "tag:" {
+            return Err(ApiError::EmptyTag);
+        }
+        if tag_owners.contains_key(&tag) {
+            existing.push(tag);
+            continue;
+        }
+        tag_owners.insert(tag.clone(), owner_values.clone());
+        added.push(tag);
+    }
+
+    Ok(AclTagUpdate {
+        added,
+        existing,
+        owners: owners.to_vec(),
+    })
 }
 
 #[cfg(test)]
@@ -532,6 +672,15 @@ mod tests {
         let url = client.url(&["oauth", "token"]).unwrap();
 
         assert_eq!(url.as_str(), "https://example.test/api/v2/oauth/token");
+    }
+
+    #[test]
+    fn builds_acl_url() {
+        let client =
+            TailscaleClient::new("https://example.test/api/v2", "secret".to_string()).unwrap();
+        let url = client.url(&["tailnet", "-", "acl"]).unwrap();
+
+        assert_eq!(url.as_str(), "https://example.test/api/v2/tailnet/-/acl");
     }
 
     #[test]
@@ -635,5 +784,75 @@ mod tests {
         let response: KeysResponse =
             serde_json::from_value(serde_json::json!({ "keys": null })).unwrap();
         assert!(response.keys.is_empty());
+    }
+
+    #[test]
+    fn ensure_tag_owners_adds_missing_cluster_node() {
+        let mut policy = serde_json::json!({
+            "acls": [{ "action": "accept", "src": ["*"], "dst": ["*:*"] }]
+        });
+        let update = ensure_tag_owners(
+            &mut policy,
+            &["tag:cluster-node".to_owned()],
+            &[DEFAULT_TAG_OWNER.to_owned()],
+        )
+        .unwrap();
+
+        assert_eq!(update.added, vec!["tag:cluster-node"]);
+        assert!(update.existing.is_empty());
+        assert_eq!(
+            policy["tagOwners"]["tag:cluster-node"],
+            json!([DEFAULT_TAG_OWNER])
+        );
+        assert_eq!(policy["acls"][0]["action"], "accept");
+    }
+
+    #[test]
+    fn ensure_tag_owners_is_idempotent() {
+        let mut policy = serde_json::json!({
+            "tagOwners": {
+                "tag:cluster-node": ["group:admins"]
+            }
+        });
+        let update = ensure_tag_owners(
+            &mut policy,
+            &["cluster-node".to_owned()],
+            &[DEFAULT_TAG_OWNER.to_owned()],
+        )
+        .unwrap();
+
+        assert!(update.added.is_empty());
+        assert_eq!(update.existing, vec!["tag:cluster-node"]);
+        assert_eq!(
+            policy["tagOwners"]["tag:cluster-node"],
+            json!(["group:admins"])
+        );
+    }
+
+    #[test]
+    fn ensure_tag_owners_rejects_non_object_policy() {
+        let mut policy = serde_json::json!([]);
+        let error = ensure_tag_owners(
+            &mut policy,
+            &["tag:cluster-node".to_owned()],
+            &[DEFAULT_TAG_OWNER.to_owned()],
+        )
+        .unwrap_err();
+        assert!(matches!(error, ApiError::InvalidAcl));
+    }
+
+    #[test]
+    fn normalize_acl_tag_accepts_input_with_or_without_prefix() {
+        assert_eq!(normalize_acl_tag("tag:cluster-node"), "tag:cluster-node");
+        assert_eq!(normalize_acl_tag("cluster-node"), "tag:cluster-node");
+        assert_eq!(normalize_acl_tag("  tag:cluster-node  "), "tag:cluster-node");
+    }
+
+    #[test]
+    fn ensure_tag_owners_rejects_empty_tag() {
+        let mut policy = serde_json::json!({});
+        let error = ensure_tag_owners(&mut policy, &[String::new()], &[DEFAULT_TAG_OWNER.to_owned()])
+            .unwrap_err();
+        assert!(matches!(error, ApiError::EmptyTag));
     }
 }

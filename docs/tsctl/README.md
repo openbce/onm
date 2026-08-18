@@ -29,7 +29,8 @@ and grant **Devices → Read** (scope `devices:core:read`, or the legacy
 `devices` / `devices:read` scopes). Without a devices scope, `list` and
 `view` return HTTP 403. Listing all OAuth clients with `list -c` needs
 **`all:read`** (or a user API key). `oauth_keys:read` is enough to resolve the
-current `--client-id` only.
+current `--client-id` only. Updating ACL tags with `update -t` needs
+**`policy_file`** (legacy `acl`) to write, or `policy_file:read` to read.
 
 ```bash
 export TS_CLIENT_ID='k...'
@@ -101,4 +102,24 @@ tsctl view -n example.com -o yaml
 `tsctl view` requires exactly one of `-n/--tailnet` and `-d/--device`.
 Omit `-o/--output` for the human-readable view. Use `-o/--output json` or
 `-o/--output yaml` for structured output.
+
+Add a tag under ACL `tagOwners` (needed before an OAuth client can use it).
+Pass the tag with `-t/--tag`, for example `tag:cluster-node`:
+
+```bash
+tsctl update -t tag:cluster-node
+tsctl update -n example.com --tag tag:cluster-node
+tsctl update -t tag:cluster-node -f
+```
+
+This GETs `/tailnet/{tailnet}/acl`, inserts the tag under `tagOwners` owned by
+`autogroup:admin` when it is missing, then POSTs the policy back with `If-Match`.
+If the tag is already present, owners are left unchanged and no write is sent.
+A write asks for confirmation (`y`/`yes`). Use `-f/--force` to skip the prompt.
+Non-interactive runs require `-f`. When authenticating with an OAuth client, the
+prompt includes that client ID.
+The credential needs the **`policy_file`** scope (legacy `acl`) to write; GET
+alone needs `policy_file:read`. JSON is used for the round-trip, so HuJSON
+comments in the policy file are not preserved.
+
 Run `tsctl <command> --help` for complete syntax.

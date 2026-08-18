@@ -1,6 +1,7 @@
 use api::{ApiError, TailscaleClient};
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
+use std::io::{self, IsTerminal, Write};
 use thiserror::Error;
 
 mod api;
@@ -73,6 +74,21 @@ enum Command {
         #[arg(short = 'o', long, value_enum)]
         output: Option<OutputFormat>,
     },
+
+    /// Add a tag under ACL tagOwners
+    Update {
+        /// Tailnet ID; use '-' for the access token's tailnet
+        #[arg(short = 'n', long, default_value = "-")]
+        tailnet: String,
+
+        /// Tag to add under tagOwners (for example tag:cluster-node)
+        #[arg(short = 't', long = "tag", required = true)]
+        tag: String,
+
+        /// Skip the confirmation prompt
+        #[arg(short = 'f', long = "force")]
+        force: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -93,6 +109,12 @@ enum Error {
     Json(#[from] serde_json::Error),
     #[error("failed to encode YAML: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("failed to read confirmation: {0}")]
+    Io(#[from] io::Error),
+    #[error("confirmation required; re-run with -f to skip the prompt")]
+    ConfirmationRequired,
+    #[error("update cancelled")]
+    Cancelled,
 }
 
 #[tokio::main]
@@ -142,6 +164,25 @@ current client, or grant all:read (or a user API key) to enumerate all clients."
             }
         }
         Command::View { .. } => unreachable!("clap requires exactly one view target"),
+        Command::Update {
+            tailnet,
+            tag,
+            force,
+        } => {
+            let (policy, etag, update) = client.plan_acl_tag_owners(&tailnet, &[tag]).await?;
+            if update.added.is_empty() {
+                output::print_acl_tag_update(&tailnet, &update);
+            } else {
+                confirm_acl_update(
+                    &tailnet,
+                    &update.added,
+                    client.oauth_client_id(),
+                    force,
+                )?;
+                client.set_acl(&tailnet, &policy, etag.as_deref()).await?;
+                output::print_acl_tag_update(&tailnet, &update);
+            }
+        }
     }
 
     Ok(())
@@ -191,6 +232,41 @@ fn print_structured(value: &Value, format: OutputFormat) -> Result<(), Error> {
         OutputFormat::Yaml => print!("{}", serde_yaml::to_string(value)?),
     }
     Ok(())
+}
+
+fn confirm_acl_update(
+    tailnet: &str,
+    tags: &[String],
+    client_id: Option<&str>,
+    force: bool,
+) -> Result<(), Error> {
+    if force {
+        return Ok(());
+    }
+    if !io::stdin().is_terminal() {
+        return Err(Error::ConfirmationRequired);
+    }
+
+    let tags = tags.join(", ");
+    match client_id {
+        Some(client_id) => eprint!(
+            "Update ACL tagOwners for client {client_id} (tailnet {tailnet}): add {tags}? [y/N] "
+        ),
+        None => eprint!("Update ACL tagOwners for tailnet {tailnet}: add {tags}? [y/N] "),
+    }
+    io::stderr().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if is_confirmed(&answer) {
+        Ok(())
+    } else {
+        Err(Error::Cancelled)
+    }
+}
+
+fn is_confirmed(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 #[cfg(test)]
@@ -301,5 +377,86 @@ mod tests {
                 clients: true,
             } if tailnet == "example.com"
         ));
+    }
+
+    #[test]
+    fn update_requires_tag() {
+        assert!(Args::try_parse_from(["tsctl", "--api-key", "secret", "update"]).is_err());
+    }
+
+    #[test]
+    fn update_accepts_tag_input() {
+        let args = Args::try_parse_from([
+            "tsctl",
+            "--api-key",
+            "secret",
+            "update",
+            "-t",
+            "tag:cluster-node",
+        ])
+        .expect("update -t should parse");
+        assert!(matches!(
+            args.command,
+            Command::Update {
+                ref tailnet,
+                ref tag,
+                force: false,
+            } if tailnet == "-" && tag == "tag:cluster-node"
+        ));
+    }
+
+    #[test]
+    fn update_keeps_tailnet_and_tag() {
+        let args = Args::try_parse_from([
+            "tsctl",
+            "--api-key",
+            "secret",
+            "update",
+            "-n",
+            "example.com",
+            "--tag",
+            "tag:vpn-gateway",
+        ])
+        .expect("update --tag should parse");
+        assert!(matches!(
+            args.command,
+            Command::Update {
+                ref tailnet,
+                ref tag,
+                force: false,
+            } if tailnet == "example.com" && tag == "tag:vpn-gateway"
+        ));
+    }
+
+    #[test]
+    fn update_accepts_force_flag() {
+        let args = Args::try_parse_from([
+            "tsctl",
+            "--api-key",
+            "secret",
+            "update",
+            "-t",
+            "tag:cluster-node",
+            "-f",
+        ])
+        .expect("update -f should parse");
+        assert!(matches!(
+            args.command,
+            Command::Update {
+                ref tag,
+                force: true,
+                ..
+            } if tag == "tag:cluster-node"
+        ));
+    }
+
+    #[test]
+    fn confirms_yes_answers() {
+        assert!(is_confirmed("y"));
+        assert!(is_confirmed("Y\n"));
+        assert!(is_confirmed(" yes "));
+        assert!(!is_confirmed(""));
+        assert!(!is_confirmed("n"));
+        assert!(!is_confirmed("no"));
     }
 }

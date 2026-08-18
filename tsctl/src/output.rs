@@ -1,4 +1,4 @@
-use crate::api::{Device, Key};
+use crate::api::{AclTagUpdate, Device, Key};
 use comfy_table::{presets::UTF8_FULL, Table};
 
 fn value_or_dash(value: &str) -> &str {
@@ -77,6 +77,24 @@ pub fn print_client_list(clients: &[Key]) {
     }
 
     println!("{table}");
+}
+
+pub fn print_acl_tag_update(tailnet: &str, update: &AclTagUpdate) {
+    if update.added.is_empty() {
+        println!(
+            "ACL tagOwners for tailnet {tailnet} already include {}; no change written.",
+            joined(&update.existing)
+        );
+        return;
+    }
+
+    println!("Updated ACL tagOwners for tailnet {tailnet}:");
+    for tag in &update.added {
+        println!("  added {tag} -> [{}]", update.owners.join(", "));
+    }
+    if !update.existing.is_empty() {
+        println!("  already present: {}", joined(&update.existing));
+    }
 }
 
 pub fn print_device(device: &Device) {
