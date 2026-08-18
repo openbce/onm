@@ -47,6 +47,10 @@ enum Command {
         /// Tailnet ID; use '-' for the access token's tailnet
         #[arg(short = 'n', long, default_value = "-")]
         tailnet: String,
+
+        /// List OAuth client IDs instead of devices
+        #[arg(short = 'c', long = "clients")]
+        clients: bool,
     },
 
     /// View a tailnet or device
@@ -96,9 +100,20 @@ async fn main() -> Result<(), Error> {
     let args = Args::parse();
     let client = build_client(&args).await?;
     match args.command {
-        Command::List { tailnet } => {
-            let (devices, _) = client.list_devices(&tailnet, false).await?;
-            output::print_device_list(&devices);
+        Command::List { tailnet, clients } => {
+            if clients {
+                let clients = client.list_oauth_clients(&tailnet).await?;
+                if clients.is_empty() {
+                    eprintln!(
+                        "No OAuth clients visible. Use TS_CLIENT_ID/TS_CLIENT_SECRET to show the \
+current client, or grant all:read (or a user API key) to enumerate all clients."
+                    );
+                }
+                output::print_client_list(&clients);
+            } else {
+                let (devices, _) = client.list_devices(&tailnet, false).await?;
+                output::print_device_list(&devices);
+            }
         }
         Command::View {
             tailnet: Some(tailnet),
@@ -252,5 +267,39 @@ mod tests {
         assert_eq!(args.client_secret.as_deref(), Some("secret"));
         assert!(args.oauth_scope.is_empty());
         assert!(args.api_key.is_none());
+    }
+
+    #[test]
+    fn list_accepts_clients_flag() {
+        let args = Args::try_parse_from(["tsctl", "--api-key", "secret", "list", "-c"])
+            .expect("list -c should parse");
+        assert!(matches!(
+            args.command,
+            Command::List {
+                ref tailnet,
+                clients: true,
+            } if tailnet == "-"
+        ));
+    }
+
+    #[test]
+    fn list_clients_flag_keeps_tailnet() {
+        let args = Args::try_parse_from([
+            "tsctl",
+            "--api-key",
+            "secret",
+            "list",
+            "-n",
+            "example.com",
+            "--clients",
+        ])
+        .expect("list --clients should parse");
+        assert!(matches!(
+            args.command,
+            Command::List {
+                ref tailnet,
+                clients: true,
+            } if tailnet == "example.com"
+        ));
     }
 }

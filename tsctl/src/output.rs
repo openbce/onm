@@ -1,4 +1,4 @@
-use crate::api::Device;
+use crate::api::{Device, Key};
 use comfy_table::{presets::UTF8_FULL, Table};
 
 fn value_or_dash(value: &str) -> &str {
@@ -55,6 +55,24 @@ pub fn print_device_list(devices: &[Device]) {
             value_or_dash(&device.client_version),
             yes_no(device.authorized),
             value_or_dash(&device.last_seen),
+        ]);
+    }
+
+    println!("{table}");
+}
+
+pub fn print_client_list(clients: &[Key]) {
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(vec!["Client ID", "Description", "Scopes", "Tags", "Created"]);
+
+    for client in clients {
+        table.add_row(vec![
+            value_or_dash(&client.id).to_owned(),
+            value_or_dash(&client.description).to_owned(),
+            joined(&client.scopes),
+            joined(&client.tags),
+            value_or_dash(&client.created).to_owned(),
         ]);
     }
 

@@ -27,7 +27,9 @@ Create the OAuth client in the Tailscale admin console under
 [Trust credentials](https://login.tailscale.com/admin/settings/trust-credentials)
 and grant **Devices → Read** (scope `devices:core:read`, or the legacy
 `devices` / `devices:read` scopes). Without a devices scope, `list` and
-`view` return HTTP 403.
+`view` return HTTP 403. Listing all OAuth clients with `list -c` needs
+**`all:read`** (or a user API key). `oauth_keys:read` is enough to resolve the
+current `--client-id` only.
 
 ```bash
 export TS_CLIENT_ID='k...'
@@ -58,6 +60,20 @@ List devices in a named tailnet:
 ```bash
 tsctl list -n example.com
 ```
+
+List OAuth client IDs in a tailnet:
+
+```bash
+tsctl list -c
+tsctl list -n example.com --clients
+```
+
+`-c/--clients` calls `GET /tailnet/{tailnet}/keys?all=true` and keeps entries
+with `keyType=client`. Tailscale only enumerates OAuth clients for credentials
+with **`all:read`** / **`all`** (or a user API access token). When you
+authenticate with `--client-id` / `TS_CLIENT_ID`, that client is always
+included (details are filled in when `oauth_keys:read` or `all:read` allows
+`GET /keys/{id}`).
 
 View a tailnet summary and its devices:
 

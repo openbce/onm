@@ -27,7 +27,7 @@ pub enum ApiError {
     #[error("Tailscale API returned HTTP {status}: {message}")]
     Http { status: StatusCode, message: String },
     #[error(
-        "Tailscale API returned HTTP {status}: {message}; OAuth token scopes are [{token_scope}] — grant Devices Read (devices:core:read) on the OAuth client at https://login.tailscale.com/admin/settings/trust-credentials"
+        "Tailscale API returned HTTP {status}: {message}; OAuth token scopes are [{token_scope}] — grant the required scopes on the OAuth client at https://login.tailscale.com/admin/settings/trust-credentials"
     )]
     PermissionDenied {
         status: StatusCode,
@@ -52,6 +52,8 @@ pub struct TailscaleClient {
     /// Scopes granted on the current access token, when known (OAuth mint).
     /// `Some` also marks that auth came from OAuth client credentials.
     token_scope: Option<String>,
+    /// OAuth client ID used to mint the access token, when applicable.
+    oauth_client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,11 +112,42 @@ struct DevicesResponse {
     devices: Vec<Device>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Key {
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub key_type: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub description: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub created: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub scopes: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeysResponse {
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    keys: Vec<Key>,
+}
+
 #[derive(Debug, Deserialize)]
 struct OAuthTokenResponse {
     access_token: Option<String>,
     #[serde(default)]
     scope: Option<String>,
+}
+
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl TailscaleClient {
@@ -140,6 +173,7 @@ impl TailscaleClient {
             base_url,
             api_key,
             token_scope: None,
+            oauth_client_id: None,
         })
     }
 
@@ -156,6 +190,7 @@ impl TailscaleClient {
         Ok(Self {
             api_key: access_token,
             token_scope,
+            oauth_client_id: Some(client_id.to_owned()),
             ..bootstrap
         })
     }
@@ -245,6 +280,94 @@ impl TailscaleClient {
         let value: Value = self.get(url).await?;
         let response: DevicesResponse = serde_json::from_value(value.clone())?;
         Ok((response.devices, value))
+    }
+
+    /// List OAuth client credentials (`keyType=client`) in the tailnet.
+    ///
+    /// Uses `GET /tailnet/{tailnet}/keys?all=true`. Tailscale only includes
+    /// OAuth clients in that list for credentials with `all` / `all:read`.
+    /// `oauth_keys:read` can fetch a known client by ID but cannot enumerate
+    /// clients, so when authenticating with OAuth we also resolve the current
+    /// client ID.
+    pub async fn list_oauth_clients(&self, tailnet: &str) -> Result<Vec<Key>, ApiError> {
+        let mut url = self.url(&["tailnet", tailnet, "keys"])?;
+        url.query_pairs_mut().append_pair("all", "true");
+        let value: Value = self.get(url).await?;
+        let response: KeysResponse = serde_json::from_value(value)?;
+
+        let mut clients = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for summary in response.keys {
+            if summary.id.is_empty() {
+                continue;
+            }
+            let key = if is_oauth_client(&summary) {
+                summary
+            } else if summary.key_type.is_empty() {
+                // Official list responses are often ID-only; fetch details.
+                let (key, _) = self.get_key(tailnet, &summary.id).await?;
+                if !is_oauth_client(&key) {
+                    continue;
+                }
+                key
+            } else {
+                continue;
+            };
+            if seen.insert(key.id.clone()) {
+                clients.push(key);
+            }
+        }
+
+        // Always include the OAuth client used for auth. Listing clients needs
+        // all:read; reading another client by ID needs oauth_keys:read. The
+        // client ID itself is known from credentials even when GET is denied.
+        if let Some(client_id) = self.oauth_client_id.as_deref() {
+            if seen.insert(client_id.to_owned()) {
+                let key = match self.get_key(tailnet, client_id).await {
+                    Ok((mut key, _)) => {
+                        if key.id.is_empty() {
+                            key.id = client_id.to_owned();
+                        }
+                        if key.key_type.is_empty() {
+                            key.key_type = "client".to_owned();
+                        }
+                        key
+                    }
+                    Err(ApiError::Http { status, .. })
+                        if status == StatusCode::NOT_FOUND || status == StatusCode::FORBIDDEN =>
+                    {
+                        Key {
+                            id: client_id.to_owned(),
+                            key_type: "client".to_owned(),
+                            description: String::new(),
+                            created: String::new(),
+                            scopes: Vec::new(),
+                            tags: Vec::new(),
+                        }
+                    }
+                    Err(ApiError::PermissionDenied { .. }) => Key {
+                        id: client_id.to_owned(),
+                        key_type: "client".to_owned(),
+                        description: String::new(),
+                        created: String::new(),
+                        scopes: Vec::new(),
+                        tags: Vec::new(),
+                    },
+                    Err(error) => return Err(error),
+                };
+                clients.push(key);
+            }
+        }
+
+        clients.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(clients)
+    }
+
+    pub async fn get_key(&self, tailnet: &str, key_id: &str) -> Result<(Key, Value), ApiError> {
+        let url = self.url(&["tailnet", tailnet, "keys", key_id])?;
+        let value: Value = self.get(url).await?;
+        let key = serde_json::from_value(value.clone())?;
+        Ok((key, value))
     }
 
     pub async fn get_device(&self, device_id: &str) -> Result<(Device, Value), ApiError> {
@@ -376,6 +499,14 @@ fn device_matches(device: &Device, query: &str) -> bool {
     .any(|value| !value.is_empty() && value.eq_ignore_ascii_case(query))
 }
 
+fn is_oauth_client(key: &Key) -> bool {
+    key.key_type.eq_ignore_ascii_case("client")
+        || (!key.scopes.is_empty()
+            && !key.key_type.eq_ignore_ascii_case("api")
+            && !key.key_type.eq_ignore_ascii_case("auth")
+            && !key.key_type.eq_ignore_ascii_case("federated"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,5 +565,75 @@ mod tests {
         assert!(device_matches(&device, "n123CNTRL"));
         assert!(device_matches(&device, "123"));
         assert!(!device_matches(&device, "other"));
+    }
+
+    #[test]
+    fn key_schema_parses_oauth_client() {
+        let key: Key = serde_json::from_value(serde_json::json!({
+            "id": "k123CNTRL",
+            "keyType": "client",
+            "description": "tsctl",
+            "created": "2026-01-01T00:00:00Z",
+            "scopes": ["devices:core:read"],
+            "tags": ["tag:ci"]
+        }))
+        .unwrap();
+
+        assert_eq!(key.id, "k123CNTRL");
+        assert_eq!(key.key_type, "client");
+        assert_eq!(key.description, "tsctl");
+        assert_eq!(key.scopes, vec!["devices:core:read"]);
+        assert_eq!(key.tags, vec!["tag:ci"]);
+    }
+
+    #[test]
+    fn key_schema_treats_null_fields_as_empty() {
+        let key: Key = serde_json::from_value(serde_json::json!({
+            "id": "k123CNTRL",
+            "keyType": "auth",
+            "description": null,
+            "created": null,
+            "scopes": null,
+            "tags": null
+        }))
+        .unwrap();
+
+        assert_eq!(key.id, "k123CNTRL");
+        assert_eq!(key.key_type, "auth");
+        assert!(key.description.is_empty());
+        assert!(key.created.is_empty());
+        assert!(key.scopes.is_empty());
+        assert!(key.tags.is_empty());
+        assert!(!is_oauth_client(&key));
+    }
+
+    #[test]
+    fn is_oauth_client_detects_client_type_and_scopes() {
+        let typed = Key {
+            id: "k1".into(),
+            key_type: "client".into(),
+            description: String::new(),
+            created: String::new(),
+            scopes: vec![],
+            tags: vec![],
+        };
+        assert!(is_oauth_client(&typed));
+
+        let scoped = Key {
+            id: "k2".into(),
+            key_type: String::new(),
+            description: String::new(),
+            created: String::new(),
+            scopes: vec!["devices:core:read".into()],
+            tags: vec![],
+        };
+        assert!(is_oauth_client(&scoped));
+    }
+
+    #[test]
+    fn keys_response_treats_null_keys_as_empty() {
+        let response: KeysResponse =
+            serde_json::from_value(serde_json::json!({ "keys": null })).unwrap();
+        assert!(response.keys.is_empty());
     }
 }
